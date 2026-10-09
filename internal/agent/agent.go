@@ -87,6 +87,8 @@ type Heartbeat struct {
 	TrustedKeyIDs []string `json:"trusted_key_ids"`
 	// Guards is the state of the local Minecraft guards, if any.
 	Guards []GuardReport `json:"guards"`
+	// L7 is the state of the reverse-proxy reject logs the agent follows, if any.
+	L7 []L7Report `json:"l7"`
 }
 
 // HostReport holds rates computed from /proc and the uplink counters.
@@ -169,6 +171,7 @@ type Agent struct {
 	applyDirty   bool
 	xdp          XDPFilter
 	guards       []*guardState
+	l7           []*l7State
 	panelAddrs   []netip.Addr
 	panelAddrsAt time.Time
 	xdpActive    bool
@@ -197,6 +200,7 @@ func New(cfg Config, log *slog.Logger, rules Ruleset, host HostSource, client *P
 		engine: detect.NewEngine(nil), targets: map[string]TargetReport{},
 	}
 	a.initGuards()
+	a.initL7()
 	return a, nil
 }
 
@@ -301,7 +305,7 @@ func (a *Agent) applyRules(now time.Time) error {
 func (a *Agent) activeMitigations() []nft.Active {
 	var out []nft.Active
 	for _, p := range mitigate.Applied(a.plans) {
-		if p.Kind == mitigate.KindXDPBlock {
+		if p.Kind == mitigate.KindXDPBlock || p.Kind == mitigate.KindL7Block {
 			continue // applied by stepXDP, not rendered into nftables
 		}
 		pre, err := netaddr.ParsePrefix(p.Target)
@@ -321,6 +325,7 @@ func (a *Agent) Tick(now time.Time) {
 	a.expireApprovals(now)
 	a.sampleHost(now)
 	a.stepGuards(now)
+	a.stepL7(now)
 	a.stepXDP(now)
 	a.sampleXDPStats(now)
 	if a.pol == nil {
@@ -451,7 +456,7 @@ func (a *Agent) handleChange(ch detect.Change, now time.Time) {
 			if a.hasPlan(p.ID) {
 				continue
 			}
-			if p.Kind == mitigate.KindXDPBlock && a.xdp == nil {
+			if (p.Kind == mitigate.KindXDPBlock || p.Kind == mitigate.KindL7Block) && a.xdp == nil {
 				a.emit("mitigation", "xdp_unavailable", map[string]string{"incident_id": ev.ID, "note": "xdp ist auf diesem Node nicht aktiviert"})
 				continue
 			}
@@ -585,7 +590,7 @@ func (a *Agent) sendHeartbeat(ctx context.Context, now time.Time) (HeartbeatRepl
 		Mode: a.modeOrDefault(), AppliedPolicyVersion: a.applied, PolicyError: a.policyErr,
 		Host: a.hostWithXDP(), Targets: a.targetList(), Mitigations: a.plans,
 		DynamicEntries: a.dynEntries, Health: a.health(), Events: a.pendingEvents(),
-		DroppedEvents: a.dropped, TrustedKeyIDs: a.trustedKeyIDs(), Guards: a.guardReports(),
+		DroppedEvents: a.dropped, TrustedKeyIDs: a.trustedKeyIDs(), Guards: a.guardReports(), L7: a.l7Reports(),
 	}
 	reply, err := a.client.Heartbeat(ctx, a.nodeID, a.priv, hb)
 	if err != nil && a.promoteNextKey(err) {

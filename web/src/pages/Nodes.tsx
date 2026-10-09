@@ -162,6 +162,29 @@ function NodeDetail({ user, nodeId, onBack }: { user: User; nodeId: string; onBa
           </div>
         </Card>
       )}
+      {node.l7 && node.l7.length > 0 && (
+        <Card title="Layer 7 (Reverse-Proxy-Logs)">
+          <div className="space-y-3 text-sm">
+            {node.l7.map((l) => (
+              <div key={l.name} className="text-slate-300">
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                  <span className="font-medium text-slate-100">{l.name}</span>
+                  {!l.readable ? <span className="text-rose-300">Log nicht lesbar</span> : (
+                    <>
+                      <span>{l.rejected_rps.toFixed(1)} abgelehnt/s</span>
+                      <span>{l.sources} Quellen</span>
+                      <span>{l.blocked} gesperrt</span>
+                      {l.unparsed > 0 && <span className="text-amber-300">{l.unparsed} Zeilen nicht lesbar (falsches Log-Format?)</span>}
+                      {l.skipped_bytes > 0 && <span className="text-amber-300">{l.skipped_bytes} Byte übersprungen (Log wächst zu schnell)</span>}
+                    </>
+                  )}
+                </div>
+                {l.top && l.top.length > 0 && <div className="mt-1 text-xs text-slate-400">{l.top.map((s) => `${s.addr} ${s.rps.toFixed(1)}/s`).join(" · ")}</div>}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
       {node.sync_error && <div className="text-sm text-rose-300">Synchronisierung: {node.sync_error}</div>}
 
       <Card title="Betriebsmodus">

@@ -28,6 +28,7 @@ type NodeDTO struct {
 	ManagementCIDRs      []string        `json:"management_cidrs"`
 	Health               json.RawMessage `json:"health"`
 	Guards               json.RawMessage `json:"guards"`
+	L7                   json.RawMessage `json:"l7"`
 	AppliedPolicyVersion int64           `json:"applied_policy_version"`
 	DesiredPolicyVersion int64           `json:"desired_policy_version"`
 	SyncStatus           string          `json:"sync_status"`
@@ -39,7 +40,7 @@ type NodeDTO struct {
 
 const nodeSelect = `
 	SELECT n.id::text, n.name, n.location_id::text, l.name, n.status, n.mode, n.hostname, n.agent_version,
-	       COALESCE(array_to_json(n.management_cidrs)::text, '[]'), n.health::text, n.guards::text,
+	       COALESCE(array_to_json(n.management_cidrs)::text, '[]'), n.health::text, n.guards::text, n.l7::text,
 	       n.applied_policy_version, n.desired_policy_version, n.sync_status, n.sync_error,
 	       n.last_heartbeat_at, n.public_key IS NOT NULL, n.created_at
 	FROM nodes n LEFT JOIN locations l ON l.id = n.location_id`
@@ -50,9 +51,9 @@ type rowScanner interface {
 
 func scanNode(row rowScanner) (NodeDTO, error) {
 	var n NodeDTO
-	var cidrs, health, guards string
+	var cidrs, health, guards, l7 string
 	err := row.Scan(&n.ID, &n.Name, &n.LocationID, &n.LocationName, &n.Status, &n.Mode, &n.Hostname, &n.AgentVersion,
-		&cidrs, &health, &guards, &n.AppliedPolicyVersion, &n.DesiredPolicyVersion, &n.SyncStatus, &n.SyncError,
+		&cidrs, &health, &guards, &l7, &n.AppliedPolicyVersion, &n.DesiredPolicyVersion, &n.SyncStatus, &n.SyncError,
 		&n.LastHeartbeatAt, &n.Enrolled, &n.CreatedAt)
 	if err != nil {
 		return n, err
@@ -64,6 +65,7 @@ func scanNode(row rowScanner) (NodeDTO, error) {
 	n.ManagementCIDRs = list
 	n.Health = json.RawMessage(health)
 	n.Guards = json.RawMessage(guards)
+	n.L7 = json.RawMessage(l7)
 	return n, nil
 }
 

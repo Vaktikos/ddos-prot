@@ -32,6 +32,8 @@ type Config struct {
 	XDPPinDir     string   `json:"xdp_pin_dir"` // where links are pinned so XDP survives an agent restart
 	// MinecraftGuards lists local sentinel-mcguard instances whose statistics the agent reads.
 	MinecraftGuards []GuardConfig `json:"minecraft_guards"`
+	// L7Sources lists reverse-proxy reject logs the agent follows (see deploy/l7/nginx-ratelimit.conf).
+	L7Sources []L7Config `json:"l7_sources"`
 }
 
 // LoadConfig reads and validates a configuration file.
@@ -98,6 +100,9 @@ func (c Config) Validate() error {
 		errs = append(errs, errors.New("detect_interval_ms muss zwischen 200 und 10000 liegen"))
 	}
 	if err := validateGuards(c.MinecraftGuards); err != nil {
+		errs = append(errs, err)
+	}
+	if err := validateL7(c.L7Sources); err != nil {
 		errs = append(errs, err)
 	}
 	switch c.XDPMode {

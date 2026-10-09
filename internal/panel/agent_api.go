@@ -170,8 +170,16 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 			guards = []agent.GuardReport{}
 		}
 		guardsJSON, _ := json.Marshal(guards)
-		_, err = tx.Exec(ctx, `UPDATE nodes SET trusted_key_ids = $2::text[], guards = $3::jsonb WHERE id = $1::uuid`,
-			nodeID, normalizeKeyIDs(hb.TrustedKeyIDs), string(guardsJSON))
+		l7 := hb.L7
+		if len(l7) > 16 {
+			l7 = l7[:16]
+		}
+		if l7 == nil {
+			l7 = []agent.L7Report{}
+		}
+		l7JSON, _ := json.Marshal(l7)
+		_, err = tx.Exec(ctx, `UPDATE nodes SET trusted_key_ids = $2::text[], guards = $3::jsonb, l7 = $4::jsonb WHERE id = $1::uuid`,
+			nodeID, normalizeKeyIDs(hb.TrustedKeyIDs), string(guardsJSON), string(l7JSON))
 	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "interner Fehler")
@@ -384,10 +392,10 @@ func (a *App) applyMitigation(ctx context.Context, tx pgx.Tx, nodeID, action str
 		_, err := tx.Exec(ctx, `INSERT INTO alerts (node_id, severity, source, title, message)
 			VALUES ($1::uuid, 'warning', 'mitigation', 'Maßnahme konnte nicht angewendet werden', $2)`, nodeID, string(payload))
 		return err
-	case "xdp_blocked":
+	case "xdp_blocked", "l7_blocked", "guard_bans_mirrored":
 		// Sources blocked in the XDP filter; kept in the audit trail so every block is traceable.
 		_, err := tx.Exec(ctx, `INSERT INTO audit_log (actor_type, actor_id, action, target_type, target_id, details)
-			VALUES ('node', $1, 'mitigation.xdp_blocked', 'node', $1, $2::jsonb)`, nodeID, string(payload))
+			VALUES ('node', $1, $3, 'node', $1, $2::jsonb)`, nodeID, string(payload), "mitigation."+action)
 		return err
 	case "xdp_unavailable":
 		_, err := tx.Exec(ctx, `INSERT INTO alerts (node_id, severity, source, title, message, dedupe_key)

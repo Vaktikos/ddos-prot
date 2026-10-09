@@ -6,17 +6,17 @@ import type { Profile, User } from "../types";
 type Config = Profile["config"];
 
 const generic: Config = {
-  total_pps: 100000, syn_pps: 20000, udp_pps: 50000, icmp_pps: 5000, conn_pps: 0, frag_pps: 0, invalid_pps: 0, protocol_abuse_pps: 0,
+  total_pps: 100000, syn_pps: 20000, udp_pps: 50000, icmp_pps: 5000, conn_pps: 0, frag_pps: 0, invalid_pps: 0, protocol_abuse_pps: 0, http_reject_rps: 0,
   confirm_seconds: 5, clear_seconds: 30,
-  mitigation: { syn_rate_per_source: 100, udp_rate_per_source: 500, auto_block_seconds: 300, drop_fragments: false, drop_invalid: false },
+  mitigation: { syn_rate_per_source: 100, udp_rate_per_source: 500, auto_block_seconds: 300, drop_fragments: false, drop_invalid: false, xdp_source_pps: 0, xdp_block_seconds: 0, l7_source_rps: 0, l7_block_seconds: 0 },
 };
 
 // Starting point for Minecraft Java: new connections per port are limited, and established
 // traffic is not counted as an attack. Values must be tuned to the server's real player load.
 const minecraft: Config = {
-  total_pps: 60000, syn_pps: 400, udp_pps: 0, icmp_pps: 2000, conn_pps: 60, frag_pps: 0, invalid_pps: 0, protocol_abuse_pps: 0,
+  total_pps: 60000, syn_pps: 400, udp_pps: 0, icmp_pps: 2000, conn_pps: 60, frag_pps: 0, invalid_pps: 0, protocol_abuse_pps: 0, http_reject_rps: 0,
   confirm_seconds: 5, clear_seconds: 20,
-  mitigation: { syn_rate_per_source: 30, udp_rate_per_source: 0, auto_block_seconds: 120, drop_fragments: false, drop_invalid: false },
+  mitigation: { syn_rate_per_source: 30, udp_rate_per_source: 0, auto_block_seconds: 120, drop_fragments: false, drop_invalid: false, xdp_source_pps: 0, xdp_block_seconds: 0, l7_source_rps: 0, l7_block_seconds: 0 },
 };
 
 const numberFields: { key: keyof Omit<Config, "mitigation">; label: string; hint: string }[] = [
@@ -28,6 +28,7 @@ const numberFields: { key: keyof Omit<Config, "mitigation">; label: string; hint
   { key: "frag_pps", label: "Fragmente/s", hint: "" },
   { key: "invalid_pps", label: "Ungültige Flags/s", hint: "" },
   { key: "protocol_abuse_pps", label: "Protokollverstöße/s (Minecraft-Guard)", hint: "ungültige Handshakes, gesperrte Quellen" },
+  { key: "http_reject_rps", label: "Abgelehnte HTTP-Anfragen/s", hint: "aus dem Reverse-Proxy-Log" },
   { key: "confirm_seconds", label: "Haltezeit (s)", hint: "bis bestätigt" },
   { key: "clear_seconds", label: "Abklingzeit (s)", hint: "bis beendet" },
 ];
@@ -114,6 +115,16 @@ export default function ProfilesPage({ user }: { user: User }) {
                 <input className="mt-1 w-full" type="number" min={0} value={cfg.mitigation.udp_rate_per_source} onChange={(e) => setMit("udp_rate_per_source", Number(e.target.value))} /></label>
               <label className="text-sm"><span className="text-slate-400">Quellsperre (s)</span>
                 <input className="mt-1 w-full" type="number" min={0} max={86400} value={cfg.mitigation.auto_block_seconds} onChange={(e) => setMit("auto_block_seconds", Number(e.target.value))} /></label>
+            </div>
+            <div className="grid gap-3 md:grid-cols-4">
+              <label className="text-sm"><span className="text-slate-400">XDP: Quelle ab pps sperren</span> <span className="text-xs text-slate-600">0 = aus</span>
+                <input className="mt-1 w-full" type="number" min={0} value={cfg.mitigation.xdp_source_pps} onChange={(e) => setMit("xdp_source_pps", Number(e.target.value))} /></label>
+              <label className="text-sm"><span className="text-slate-400">XDP-Sperrdauer (s)</span>
+                <input className="mt-1 w-full" type="number" min={0} max={86400} value={cfg.mitigation.xdp_block_seconds} onChange={(e) => setMit("xdp_block_seconds", Number(e.target.value))} /></label>
+              <label className="text-sm"><span className="text-slate-400">HTTP: Quelle ab Ablehnungen/s sperren</span> <span className="text-xs text-slate-600">0 = aus</span>
+                <input className="mt-1 w-full" type="number" min={0} value={cfg.mitigation.l7_source_rps} onChange={(e) => setMit("l7_source_rps", Number(e.target.value))} /></label>
+              <label className="text-sm"><span className="text-slate-400">HTTP-Sperrdauer (s)</span>
+                <input className="mt-1 w-full" type="number" min={0} max={86400} value={cfg.mitigation.l7_block_seconds} onChange={(e) => setMit("l7_block_seconds", Number(e.target.value))} /></label>
             </div>
             <div className="flex flex-wrap gap-6 text-sm text-slate-300">
               <label className="flex items-center gap-2"><input type="checkbox" checked={cfg.mitigation.drop_fragments} onChange={(e) => setMit("drop_fragments", e.target.checked)} /> Fragmente bei Vorfall verwerfen</label>

@@ -118,3 +118,22 @@ func TestFragmentAndInvalidFlagMitigationFollowProfile(t *testing.T) {
 		t.Fatalf("Dry-Run muss auch hier nur vorschlagen: %+v", d.Plans)
 	}
 }
+
+func TestHTTPFloodPlansL7BlockOnlyWhenProfileAsks(t *testing.T) {
+	prof := profile()
+	prof.HTTPRejectRPS = 100
+	ev := event(detect.CategoryHTTPFlood, detect.VerdictConfirmed)
+	d := Decide(ev, prof, policy.ModeAuto, 0, 100)
+	if len(d.Plans) != 0 {
+		t.Fatalf("ohne l7_source_rps keine automatische Maßnahme: %+v", d.Plans)
+	}
+	prof.Mitigation.L7SourceRPS, prof.Mitigation.L7BlockSeconds = 30, 120
+	d = Decide(ev, prof, policy.ModeAuto, 0, 100)
+	if len(d.Plans) != 1 || d.Plans[0].Kind != KindL7Block || d.Plans[0].Rate != 30 || d.Plans[0].AutoBlockSeconds != 120 {
+		t.Fatalf("plan: %+v", d.Plans)
+	}
+	d = Decide(ev, prof, policy.ModeApproval, 0, 100)
+	if d.Plans[0].Status != StatusPendingApproval {
+		t.Fatalf("im Freigabemodus muss der Plan warten: %+v", d.Plans[0])
+	}
+}

@@ -82,6 +82,9 @@ type Profile struct {
 	// ProtocolAbusePPS flags malformed or banned-source connection attempts per second reported
 	// by a Minecraft guard in front of the service (see internal/mcguard).
 	ProtocolAbusePPS float64 `json:"protocol_abuse_pps"`
+	// HTTPRejectRPS flags requests per second that the reverse proxy in front of the service
+	// rejected (rate limits), read from its reject log (see internal/l7).
+	HTTPRejectRPS float64 `json:"http_reject_rps"`
 
 	// Adaptive detection: a hit when pps >= max(MinPPS, baseline*BaselineMultiplier).
 	BaselineMultiplier float64 `json:"baseline_multiplier"`
@@ -114,6 +117,10 @@ type Mitigation struct {
 	// to be enabled on the node and blocks for XDPBlockSeconds.
 	XDPSourcePPS    float64 `json:"xdp_source_pps"`
 	XDPBlockSeconds int     `json:"xdp_block_seconds"`
+	// L7SourceRPS, when positive, lets the agent block sources whose rejected requests reach this
+	// rate while an http_flood incident is confirmed. It needs XDP and blocks for L7BlockSeconds.
+	L7SourceRPS    float64 `json:"l7_source_rps"`
+	L7BlockSeconds int     `json:"l7_block_seconds"`
 }
 
 // ManualBlock is an operator-approved temporary block of a source prefix.
@@ -331,7 +338,7 @@ func validateProfile(name string, prof Profile) []error {
 	for label, v := range map[string]float64{
 		"total_pps": prof.TotalPPS, "syn_pps": prof.SYNPPS, "udp_pps": prof.UDPPPS,
 		"icmp_pps": prof.ICMPPPS, "min_pps": prof.MinPPS, "conn_pps": prof.ConnPPS,
-		"frag_pps": prof.FragPPS, "invalid_pps": prof.InvalidPPS, "protocol_abuse_pps": prof.ProtocolAbusePPS,
+		"frag_pps": prof.FragPPS, "invalid_pps": prof.InvalidPPS, "protocol_abuse_pps": prof.ProtocolAbusePPS, "http_reject_rps": prof.HTTPRejectRPS,
 	} {
 		if v < 0 {
 			add("%s darf nicht negativ sein", label)
@@ -346,7 +353,7 @@ func validateProfile(name string, prof Profile) []error {
 	if prof.ClearSeconds < 1 || prof.ClearSeconds > 900 {
 		add("clear_seconds muss zwischen 1 und 900 liegen")
 	}
-	if prof.TotalPPS == 0 && prof.SYNPPS == 0 && prof.UDPPPS == 0 && prof.ICMPPPS == 0 && prof.ConnPPS == 0 && prof.FragPPS == 0 && prof.InvalidPPS == 0 && prof.ProtocolAbusePPS == 0 && prof.BaselineMultiplier == 0 {
+	if prof.TotalPPS == 0 && prof.SYNPPS == 0 && prof.UDPPPS == 0 && prof.ICMPPPS == 0 && prof.ConnPPS == 0 && prof.FragPPS == 0 && prof.InvalidPPS == 0 && prof.ProtocolAbusePPS == 0 && prof.HTTPRejectRPS == 0 && prof.BaselineMultiplier == 0 {
 		add("mindestens ein Erkennungsschwellwert muss gesetzt sein")
 	}
 	m := prof.Mitigation
@@ -361,6 +368,12 @@ func validateProfile(name string, prof Profile) []error {
 	}
 	if m.XDPSourcePPS > 0 && m.XDPBlockSeconds == 0 {
 		add("xdp_block_seconds muss gesetzt sein, wenn xdp_source_pps verwendet wird")
+	}
+	if m.L7SourceRPS < 0 || m.L7BlockSeconds < 0 || m.L7BlockSeconds > 86400 {
+		add("l7_source_rps und l7_block_seconds müssen im gültigen Bereich liegen (Sperre höchstens 86400 s)")
+	}
+	if m.L7SourceRPS > 0 && m.L7BlockSeconds == 0 {
+		add("l7_block_seconds muss gesetzt sein, wenn l7_source_rps verwendet wird")
 	}
 	return errs
 }

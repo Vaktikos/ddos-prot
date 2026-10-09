@@ -118,3 +118,23 @@ func TestValidateRejectsCatchAllTrustedSource(t *testing.T) {
 		}
 	}
 }
+
+func TestL7MitigationNeedsBlockDuration(t *testing.T) {
+	prof := Profile{Kind: "web", HTTPRejectRPS: 100, ConfirmSeconds: 3, ClearSeconds: 5,
+		Mitigation: Mitigation{L7SourceRPS: 30}}
+	if ValidateProfile("p", prof) == nil {
+		t.Fatal("l7_source_rps ohne l7_block_seconds muss abgelehnt werden")
+	}
+	prof.Mitigation.L7BlockSeconds = 120
+	if err := ValidateProfile("p", prof); err != nil {
+		t.Fatal(err)
+	}
+	prof.Mitigation.L7BlockSeconds = 90000
+	if ValidateProfile("p", prof) == nil {
+		t.Fatal("zu lange Sperre muss abgelehnt werden")
+	}
+	prof = Profile{Kind: "web", HTTPRejectRPS: -1, ConfirmSeconds: 3, ClearSeconds: 5, SYNPPS: 1}
+	if ValidateProfile("p", prof) == nil {
+		t.Fatal("negative Schwelle muss abgelehnt werden")
+	}
+}

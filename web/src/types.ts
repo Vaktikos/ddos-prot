@@ -17,6 +17,17 @@ export interface GuardReport {
   bans_issued: number;
 }
 
+export interface L7Report {
+  name: string;
+  readable: boolean;
+  rejected_rps: number;
+  sources: number;
+  top: { addr: string; rps: number }[];
+  unparsed: number;
+  skipped_bytes: number;
+  blocked: number;
+}
+
 export interface Node {
   id: string;
   name: string;
@@ -28,6 +39,7 @@ export interface Node {
   management_cidrs: string[];
   health: { status?: string; errors?: string[] };
   guards: GuardReport[];
+  l7: L7Report[];
   applied_policy_version: number;
   desired_policy_version: number;
   sync_status: "never" | "pending" | "synced" | "failed";
@@ -87,6 +99,7 @@ export interface Profile {
     frag_pps: number;
     invalid_pps: number;
     protocol_abuse_pps: number;
+    http_reject_rps: number;
     confirm_seconds: number;
     clear_seconds: number;
     mitigation: {
@@ -95,6 +108,10 @@ export interface Profile {
       auto_block_seconds: number;
       drop_fragments: boolean;
       drop_invalid: boolean;
+      xdp_source_pps: number;
+      xdp_block_seconds: number;
+      l7_source_rps: number;
+      l7_block_seconds: number;
     };
   };
 }

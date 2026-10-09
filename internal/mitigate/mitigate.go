@@ -43,6 +43,9 @@ type Decision struct {
 // not rendered into nftables.
 const KindXDPBlock = "xdp_block_sources"
 
+// KindL7Block blocks, in XDP, the sources the reverse proxy keeps rejecting. Applied by the agent.
+const KindL7Block = "l7_block_sources"
+
 // Decide evaluates an event. Only confirmed attacks trigger countermeasures.
 // dynUsed and dynMax describe the kernel set of temporary source blocks; when it
 // is full, temporary blocks are withheld and only rate limits are used.
@@ -105,6 +108,9 @@ func Decide(ev detect.Event, prof policy.Profile, mode string, dynUsed, dynMax i
 	}
 	if volumetric && prof.Mitigation.XDPSourcePPS > 0 {
 		d.Plans = append(d.Plans, plan(KindXDPBlock, int(prof.Mitigation.XDPSourcePPS), prof.Mitigation.XDPBlockSeconds))
+	}
+	if ev.Category == detect.CategoryHTTPFlood && prof.Mitigation.L7SourceRPS > 0 {
+		d.Plans = append(d.Plans, plan(KindL7Block, int(prof.Mitigation.L7SourceRPS), prof.Mitigation.L7BlockSeconds))
 	}
 	if len(d.Plans) == 0 {
 		d.Note = fmt.Sprintf("%s: Profil erlaubt keine automatische Maßnahme, Administratoren werden benachrichtigt", ev.Category)
