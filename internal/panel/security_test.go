@@ -221,3 +221,34 @@ func TestKeyRotationCrashRecovery(t *testing.T) {
 		t.Fatal("der ausstehende Schlüssel muss zur Identität werden")
 	}
 }
+
+// A malformed event must not block the heartbeat or the events that follow it.
+func TestPoisonEventDoesNotBlockHeartbeat(t *testing.T) {
+	e := newRotationEnv(t)
+	priv, err := identity.LoadKey(filepath.Join(e.stateDir, "identity.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	body := []byte(`{"agent_version":"0.1.0","health":{"status":"ok"},"events":[
+	 {"id":"poison-1","type":"mitigation","action":"proposed_applied","at":"` + now + `","payload":{"id":"x","target":"","kind":"syn_rate_limit"}},
+	 {"id":"unknown-1","type":"mitigation","action":"something_new","at":"` + now + `","payload":{"foo":1}},
+	 {"id":"good-1","type":"alert","action":"escalation","at":"` + now + `","payload":{"incident_id":"inc-1","target":"192.0.2.1/32","category":"syn_flood","peak_pps":1,"note":"ok"}}]}`)
+	req, _ := http.NewRequest(http.MethodPost, e.tp.base+"/agent/v1/heartbeat", bytes.NewReader(body))
+	if err := identity.Sign(req, e.nodeID, priv, body, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("ein fehlerhaftes Ereignis darf den Heartbeat nicht scheitern lassen: HTTP %d", resp.StatusCode)
+	}
+	code, out := e.tp.admin.call(http.MethodGet, "/api/v1/alerts", nil)
+	mustOK(t, "alarme", code, out, http.StatusOK)
+	if !bytes.Contains(out, []byte("Eskalation")) {
+		t.Fatalf("das gültige Ereignis nach dem fehlerhaften muss verarbeitet werden: %s", out)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -505,5 +506,139 @@ func TestNearlyFullConntrackTableDegradesHealth(t *testing.T) {
 	h := a.health()
 	if h.Status != "degraded" || !strings.Contains(strings.Join(h.Errors, " "), "conntrack") {
 		t.Fatalf("90 %% conntrack muss degraded melden: %+v", h)
+	}
+}
+
+// fakeXDP records what the agent asks the filter to do.
+type fakeXDP struct {
+	allow, protect []netip.Prefix
+	manual         map[netip.Prefix]time.Time
+	blocks         map[netip.Prefix]time.Time
+	rates          []SourceRate
+	resets         int
+}
+
+func newFakeXDP() *fakeXDP {
+	return &fakeXDP{manual: map[netip.Prefix]time.Time{}, blocks: map[netip.Prefix]time.Time{}}
+}
+func (f *fakeXDP) SetAllow(p []netip.Prefix) error     { f.allow = p; return nil }
+func (f *fakeXDP) SetProtected(p []netip.Prefix) error { f.protect = p; return nil }
+func (f *fakeXDP) SetBlocks(_ string, w map[netip.Prefix]time.Time) error {
+	f.manual = w
+	return nil
+}
+func (f *fakeXDP) Block(p netip.Prefix, until time.Time, _ string) error {
+	f.blocks[p] = until
+	return nil
+}
+func (f *fakeXDP) Expire(time.Time) int { return 0 }
+func (f *fakeXDP) BlockCount() int      { return len(f.blocks) }
+func (f *fakeXDP) Sample(time.Time, float64, int) []SourceRate {
+	return f.rates
+}
+func (f *fakeXDP) ResetBaseline()           { f.resets++ }
+func (f *fakeXDP) Stats() (XDPStats, error) { return XDPStats{}, nil }
+
+func xdpPolicy(version int64, mode string) *policy.Policy {
+	p := testPolicy(version, mode)
+	prof := p.Profiles["std"]
+	prof.Mitigation.XDPSourcePPS = 1000
+	prof.Mitigation.XDPBlockSeconds = 60
+	p.Profiles["std"] = prof
+	p.Trusted = []string{"198.51.100.0/24"}
+	p.Blocks = []policy.ManualBlock{{RuleID: "r1", Prefix: "203.0.113.99/32", ExpiresAt: time.Now().Add(time.Hour)}}
+	return p
+}
+
+func TestXDPBlocksStrongSourcesButNeverProtectedAddresses(t *testing.T) {
+	e := setupEnv(t)
+	e.panel.publish(t, xdpPolicy(1, policy.ModeAuto))
+	a := e.newAgent(t)
+	x := newFakeXDP()
+	a.SetXDP(x)
+	_ = a.Heartbeat(context.Background(), time.Now())
+
+	if len(x.allow) < 2 || len(x.protect) != 1 || len(x.manual) != 1 {
+		t.Fatalf("Policy nicht gespiegelt: allow=%v protect=%v manual=%v", x.allow, x.protect, x.manual)
+	}
+
+	d := &driver{t: t, a: a, rules: e.rules, now: time.Now()}
+	d.quiet(5)
+	x.rates = []SourceRate{
+		{Addr: netip.MustParseAddr("1.2.3.4"), PPS: 5000},
+		{Addr: netip.MustParseAddr("203.0.113.10"), PPS: 9000}, // management
+		{Addr: netip.MustParseAddr("192.0.2.10"), PPS: 8000},   // the protected address itself
+		{Addr: netip.MustParseAddr("198.51.100.7"), PPS: 7000}, // trusted network
+	}
+	d.attack(8)
+
+	if _, ok := x.blocks[netip.MustParsePrefix("1.2.3.4/32")]; !ok {
+		t.Fatalf("starke Quelle muss gesperrt werden: %v", x.blocks)
+	}
+	if len(x.blocks) != 1 {
+		t.Fatalf("Management, geschützte und vertrauenswürdige Adressen dürfen nie gesperrt werden: %v", x.blocks)
+	}
+	if x.resets == 0 {
+		t.Fatal("beim Start des Quellsperrens muss die Basislinie zurückgesetzt werden")
+	}
+}
+
+func TestXDPIsNotUsedInDryRun(t *testing.T) {
+	e := setupEnv(t)
+	e.panel.publish(t, xdpPolicy(1, policy.ModeDryRun))
+	a := e.newAgent(t)
+	x := newFakeXDP()
+	a.SetXDP(x)
+	_ = a.Heartbeat(context.Background(), time.Now())
+	d := &driver{t: t, a: a, rules: e.rules, now: time.Now()}
+	d.quiet(5)
+	x.rates = []SourceRate{{Addr: netip.MustParseAddr("1.2.3.4"), PPS: 5000}}
+	d.attack(8)
+	if len(x.blocks) != 0 {
+		t.Fatalf("Dry-Run darf nichts sperren: %v", x.blocks)
+	}
+}
+
+func TestMissingXDPIsReportedNotSilentlyIgnored(t *testing.T) {
+	e := setupEnv(t)
+	e.panel.publish(t, xdpPolicy(1, policy.ModeAuto))
+	a := e.newAgent(t) // no XDP enabled
+	_ = a.Heartbeat(context.Background(), time.Now())
+	d := &driver{t: t, a: a, rules: e.rules, now: time.Now()}
+	d.quiet(5)
+	d.attack(8)
+	if !strings.Contains(strings.Join(outboxTypes(a), " "), "mitigation/xdp_unavailable") {
+		t.Fatalf("fehlendes XDP muss gemeldet werden: %v", outboxTypes(a))
+	}
+	if !strings.Contains(e.rules.lastScript(), "meter ss_") {
+		t.Fatal("die nftables-Maßnahme muss trotzdem greifen")
+	}
+}
+
+func TestXDPNeverBlocksThePanelAddress(t *testing.T) {
+	e := setupEnv(t) // the fake panel listens on 127.0.0.1
+	e.panel.publish(t, xdpPolicy(1, policy.ModeAuto))
+	a := e.newAgent(t)
+	x := newFakeXDP()
+	a.SetXDP(x)
+	_ = a.Heartbeat(context.Background(), time.Now())
+	d := &driver{t: t, a: a, rules: e.rules, now: time.Now()}
+	d.quiet(5)
+	x.rates = []SourceRate{{Addr: netip.MustParseAddr("127.0.0.1"), PPS: 9000}, {Addr: netip.MustParseAddr("1.2.3.4"), PPS: 5000}}
+	d.attack(8)
+	if _, bad := x.blocks[netip.MustParsePrefix("127.0.0.1/32")]; bad {
+		t.Fatal("die Panel-Adresse darf nie gesperrt werden")
+	}
+	if _, ok := x.blocks[netip.MustParsePrefix("1.2.3.4/32")]; !ok {
+		t.Fatal("andere starke Quellen müssen weiterhin gesperrt werden")
+	}
+	found := false
+	for _, p := range x.allow {
+		if p.Contains(netip.MustParseAddr("127.0.0.1")) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Panel-Adresse muss in der Allowlist stehen: %v", x.allow)
 	}
 }

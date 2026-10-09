@@ -166,11 +166,11 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := tx.Exec(ctx, `INSERT INTO node_metrics
-		(node_id, ts, cpu_percent, mem_used_percent, rx_bps, tx_bps, rx_pps, tx_pps, dynamic_entries)
-		VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9)
+		(node_id, ts, cpu_percent, mem_used_percent, rx_bps, tx_bps, rx_pps, tx_pps, dynamic_entries, xdp_dropped_pps)
+		VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (node_id, ts) DO NOTHING`,
 		nodeID, now, hb.Host.CPUPercent, hb.Host.MemUsedPct, hb.Host.RxBps, hb.Host.TxBps,
-		hb.Host.RxPPS, hb.Host.TxPPS, hb.DynamicEntries); err != nil {
+		hb.Host.RxPPS, hb.Host.TxPPS, hb.DynamicEntries, hb.Host.XDPDropPPS); err != nil {
 		writeErr(w, http.StatusInternalServerError, "interner Fehler")
 		return
 	}
@@ -208,9 +208,7 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if tag.RowsAffected() == 1 { // retransmitted events have no further effect
-			if err := a.applyEvent(ctx, tx, nodeID, ev, payload); err != nil {
-				a.log.Error("agent-ereignis nicht verarbeitbar", "node", nodeID, "type", ev.Type, "err", err)
-			}
+			a.applyEventIsolated(ctx, tx, nodeID, ev, payload)
 		}
 	}
 
@@ -225,6 +223,26 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, reply)
+}
+
+// applyEventIsolated applies one event inside a savepoint. A failing statement would
+// otherwise abort the whole heartbeat transaction; the agent would resend the same event
+// forever, so one bad event could block all later heartbeats. The event stays recorded in
+// agent_events either way.
+func (a *App) applyEventIsolated(ctx context.Context, tx pgx.Tx, nodeID string, ev agent.Event, payload []byte) {
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		a.log.Error("savepoint nicht möglich", "node", nodeID, "err", err)
+		return
+	}
+	if err := a.applyEvent(ctx, sp, nodeID, ev, payload); err != nil {
+		_ = sp.Rollback(ctx)
+		a.log.Error("agent-ereignis nicht verarbeitbar", "node", nodeID, "type", ev.Type, "action", ev.Action, "err", err)
+		return
+	}
+	if err := sp.Commit(ctx); err != nil {
+		a.log.Error("savepoint-commit fehlgeschlagen", "node", nodeID, "err", err)
+	}
 }
 
 func (a *App) heartbeatReply(ctx context.Context, tx pgx.Tx, nodeID string, desired int64) (agent.HeartbeatReply, error) {
@@ -352,6 +370,21 @@ func (a *App) applyMitigation(ctx context.Context, tx pgx.Tx, nodeID, action str
 		_, err := tx.Exec(ctx, `INSERT INTO alerts (node_id, severity, source, title, message)
 			VALUES ($1::uuid, 'warning', 'mitigation', 'Maßnahme konnte nicht angewendet werden', $2)`, nodeID, string(payload))
 		return err
+	case "xdp_blocked":
+		// Sources blocked in the XDP filter; kept in the audit trail so every block is traceable.
+		_, err := tx.Exec(ctx, `INSERT INTO audit_log (actor_type, actor_id, action, target_type, target_id, details)
+			VALUES ('node', $1, 'mitigation.xdp_blocked', 'node', $1, $2::jsonb)`, nodeID, string(payload))
+		return err
+	case "xdp_unavailable":
+		_, err := tx.Exec(ctx, `INSERT INTO alerts (node_id, severity, source, title, message, dedupe_key)
+			VALUES ($1::uuid, 'warning', 'mitigation', 'XDP-Maßnahme nicht möglich', 'Das Profil verlangt XDP, auf dem Node ist es nicht aktiviert.', $2)
+			ON CONFLICT (dedupe_key) WHERE acknowledged_at IS NULL AND dedupe_key IS NOT NULL DO NOTHING`,
+			nodeID, "xdp-unavailable:"+nodeID)
+		return err
+	case "proposed_proposed", "proposed_pending_approval", "proposed_applied", "approved":
+		// handled below
+	default:
+		return nil // unknown actions from newer agents are recorded in agent_events and ignored here
 	}
 	var plan mitigate.Plan
 	if err := json.Unmarshal(payload, &plan); err != nil {

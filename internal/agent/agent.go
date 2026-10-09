@@ -96,6 +96,8 @@ type HostReport struct {
 	RxDropsTotal uint64  `json:"rx_drops_total"`
 	TxDropsTotal uint64  `json:"tx_drops_total"`
 	ConntrackPct float64 `json:"conntrack_percent"`
+	XDPDropPPS   float64 `json:"xdp_dropped_pps"`
+	XDPBlocks    int     `json:"xdp_blocks"`
 }
 
 // TargetReport holds the last measured rates of one protected target.
@@ -157,6 +159,13 @@ type Agent struct {
 	hostReport   HostReport
 	hostAt       time.Time
 	applyDirty   bool
+	xdp          XDPFilter
+	panelAddrs   []netip.Addr
+	panelAddrsAt time.Time
+	xdpActive    bool
+	xdpPrev      XDPStats
+	xdpPrevAt    time.Time
+	xdpDropPPS   float64
 	urgent       bool      // an incident changed; report before the next scheduled heartbeat
 	lastUrgent   time.Time // rate limit for urgent heartbeats
 }
@@ -231,6 +240,7 @@ func (a *Agent) adopt(env policy.Envelope, source string) error {
 	}
 	a.applied = p.Version
 	a.policyErr = ""
+	a.syncXDP()
 	a.emit("policy", "applied", map[string]any{"version": p.Version, "source": source, "sha256": env.SHA256})
 	a.log.Info("policy angewendet", "version", p.Version, "mode", p.Mode, "source", source)
 	return nil
@@ -280,6 +290,9 @@ func (a *Agent) applyRules(now time.Time) error {
 func (a *Agent) activeMitigations() []nft.Active {
 	var out []nft.Active
 	for _, p := range mitigate.Applied(a.plans) {
+		if p.Kind == mitigate.KindXDPBlock {
+			continue // applied by stepXDP, not rendered into nftables
+		}
 		pre, err := netaddr.ParsePrefix(p.Target)
 		if err != nil {
 			continue
@@ -296,6 +309,8 @@ func (a *Agent) activeMitigations() []nft.Active {
 func (a *Agent) Tick(now time.Time) {
 	a.expireApprovals(now)
 	a.sampleHost(now)
+	a.stepXDP(now)
+	a.sampleXDPStats(now)
 	if a.pol == nil {
 		return
 	}
@@ -422,6 +437,10 @@ func (a *Agent) handleChange(ch detect.Change, now time.Time) {
 		}
 		for _, p := range d.Plans {
 			if a.hasPlan(p.ID) {
+				continue
+			}
+			if p.Kind == mitigate.KindXDPBlock && a.xdp == nil {
+				a.emit("mitigation", "xdp_unavailable", map[string]string{"incident_id": ev.ID, "note": "xdp ist auf diesem Node nicht aktiviert"})
 				continue
 			}
 			a.plans = append(a.plans, p)
@@ -552,7 +571,7 @@ func (a *Agent) sendHeartbeat(ctx context.Context, now time.Time) (HeartbeatRepl
 	hb := Heartbeat{
 		AgentVersion: Version, Hostname: hostname, SentAt: now,
 		Mode: a.modeOrDefault(), AppliedPolicyVersion: a.applied, PolicyError: a.policyErr,
-		Host: a.hostReport, Targets: a.targetList(), Mitigations: a.plans,
+		Host: a.hostWithXDP(), Targets: a.targetList(), Mitigations: a.plans,
 		DynamicEntries: a.dynEntries, Health: a.health(), Events: a.pendingEvents(),
 		DroppedEvents: a.dropped,
 	}
@@ -850,4 +869,31 @@ func HostSampler(uplinks []string) HostSource {
 		}
 		return hc, nil
 	}
+}
+
+// sampleXDPStats turns the cumulative XDP drop counter into a rate for the heartbeat.
+func (a *Agent) sampleXDPStats(now time.Time) {
+	if a.xdp == nil {
+		return
+	}
+	st, err := a.xdp.Stats()
+	if err != nil {
+		a.setError("xdp zähler: " + err.Error())
+		return
+	}
+	if !a.xdpPrevAt.IsZero() && st.DroppedPackets >= a.xdpPrev.DroppedPackets {
+		if dt := now.Sub(a.xdpPrevAt).Seconds(); dt > 0 {
+			a.xdpDropPPS = float64(st.DroppedPackets-a.xdpPrev.DroppedPackets) / dt
+		}
+	}
+	a.xdpPrev, a.xdpPrevAt = st, now
+}
+
+func (a *Agent) hostWithXDP() HostReport {
+	h := a.hostReport
+	if a.xdp != nil {
+		h.XDPDropPPS = a.xdpDropPPS
+		h.XDPBlocks = a.xdp.BlockCount()
+	}
+	return h
 }

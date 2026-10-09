@@ -26,6 +26,10 @@ type Config struct {
 	HeartbeatSeconds int      `json:"heartbeat_seconds"`
 	DetectMillis     int      `json:"detect_interval_ms"`
 	ApprovalTimeoutS int      `json:"approval_timeout_seconds"`
+	// XDPInterfaces enables the XDP early-drop filter on these interfaces. Empty = off.
+	XDPInterfaces []string `json:"xdp_interfaces"`
+	XDPMode       string   `json:"xdp_mode"`    // auto (default), native or generic
+	XDPPinDir     string   `json:"xdp_pin_dir"` // where links are pinned so XDP survives an agent restart
 }
 
 // LoadConfig reads and validates a configuration file.
@@ -63,6 +67,12 @@ func (c *Config) applyDefaults() {
 	if c.ApprovalTimeoutS == 0 {
 		c.ApprovalTimeoutS = 900
 	}
+	if c.XDPMode == "" {
+		c.XDPMode = "auto"
+	}
+	if c.XDPPinDir == "" {
+		c.XDPPinDir = "/sys/fs/bpf/sentinel-shield"
+	}
 }
 
 // Validate checks the configuration before the agent touches the firewall.
@@ -84,6 +94,11 @@ func (c Config) Validate() error {
 	}
 	if c.DetectMillis < 200 || c.DetectMillis > 10000 {
 		errs = append(errs, errors.New("detect_interval_ms muss zwischen 200 und 10000 liegen"))
+	}
+	switch c.XDPMode {
+	case "", "auto", "native", "generic":
+	default:
+		errs = append(errs, errors.New("xdp_mode muss auto, native oder generic sein"))
 	}
 	if c.ApprovalTimeoutS < 60 {
 		errs = append(errs, errors.New("approval_timeout_seconds muss >= 60 sein"))

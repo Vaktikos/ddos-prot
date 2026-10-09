@@ -42,17 +42,18 @@ type Dashboard struct {
 }
 
 type nodeLive struct {
-	ID         string     `json:"id"`
-	Name       string     `json:"name"`
-	Status     string     `json:"status"`
-	CPUPercent *float64   `json:"cpu_percent"`
-	MemPercent *float64   `json:"mem_percent"`
-	Gbps       *float64   `json:"gbps"`
-	PPS        *float64   `json:"pps"`
-	SampledAt  *time.Time `json:"sampled_at"`
-	AppliedVer int64      `json:"applied_policy_version"`
-	DesiredVer int64      `json:"desired_policy_version"`
-	SyncStatus string     `json:"sync_status"`
+	ID            string     `json:"id"`
+	Name          string     `json:"name"`
+	Status        string     `json:"status"`
+	CPUPercent    *float64   `json:"cpu_percent"`
+	MemPercent    *float64   `json:"mem_percent"`
+	Gbps          *float64   `json:"gbps"`
+	PPS           *float64   `json:"pps"`
+	SampledAt     *time.Time `json:"sampled_at"`
+	XDPDroppedPPS *float64   `json:"xdp_dropped_pps"`
+	AppliedVer    int64      `json:"applied_policy_version"`
+	DesiredVer    int64      `json:"desired_policy_version"`
+	SyncStatus    string     `json:"sync_status"`
 }
 
 type targetLive struct {
@@ -74,7 +75,7 @@ func (a *App) dashboard(w http.ResponseWriter, r *http.Request, _ Actor) {
 
 	rows, err := a.db.Query(ctx, `
 		SELECT n.id::text, n.name, n.status, n.applied_policy_version, n.desired_policy_version, n.sync_status,
-		       m.cpu_percent, m.mem_used_percent, (m.rx_bps + m.tx_bps) / 1e9, m.rx_pps + m.tx_pps, m.ts
+		       m.cpu_percent, m.mem_used_percent, (m.rx_bps + m.tx_bps) / 1e9, m.rx_pps + m.tx_pps, m.ts, m.xdp_dropped_pps
 		FROM nodes n
 		LEFT JOIN LATERAL (SELECT * FROM node_metrics nm WHERE nm.node_id = n.id ORDER BY ts DESC LIMIT 1) m ON true
 		WHERE n.status <> 'revoked'
@@ -86,7 +87,7 @@ func (a *App) dashboard(w http.ResponseWriter, r *http.Request, _ Actor) {
 	for rows.Next() {
 		var n nodeLive
 		if err := rows.Scan(&n.ID, &n.Name, &n.Status, &n.AppliedVer, &n.DesiredVer, &n.SyncStatus,
-			&n.CPUPercent, &n.MemPercent, &n.Gbps, &n.PPS, &n.SampledAt); err != nil {
+			&n.CPUPercent, &n.MemPercent, &n.Gbps, &n.PPS, &n.SampledAt, &n.XDPDroppedPPS); err != nil {
 			rows.Close()
 			writeErr(w, http.StatusInternalServerError, "lesefehler")
 			return
@@ -97,6 +98,7 @@ func (a *App) dashboard(w http.ResponseWriter, r *http.Request, _ Actor) {
 		} else if n.SampledAt != nil && n.Gbps != nil {
 			d.ThroughputGbps += *n.Gbps
 			d.PPS += *n.PPS
+			d.DroppedPPS += derefOr(n.XDPDroppedPPS) // early drops count as mitigated traffic
 		}
 		d.NodeDetails = append(d.NodeDetails, n)
 	}

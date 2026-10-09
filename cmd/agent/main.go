@@ -14,6 +14,7 @@ import (
 	"github.com/vaktikos/ddos-prot/internal/agent"
 	"github.com/vaktikos/ddos-prot/internal/metrics"
 	"github.com/vaktikos/ddos-prot/internal/nft"
+	"github.com/vaktikos/ddos-prot/internal/xdp"
 )
 
 const usage = `sentinel-agent %s
@@ -22,6 +23,7 @@ Befehle:
   enroll  --config PFAD --token TOKEN [--force]   Node beim Panel registrieren
   check   --config PFAD                            Konfiguration und nftables prüfen (ändert nichts)
   run     --config PFAD                            Schutzdienst starten (systemd)
+  xdp-detach --config PFAD                         XDP-Filter bewusst von allen Interfaces entfernen
   version                                          Version ausgeben
 `
 
@@ -39,6 +41,8 @@ func main() {
 		err = cmdCheck(os.Args[2:])
 	case "run":
 		err = cmdRun(os.Args[2:], log)
+	case "xdp-detach":
+		err = cmdXDPDetach(os.Args[2:])
 	case "version":
 		fmt.Println(agent.Version)
 	default:
@@ -105,6 +109,25 @@ func cmdCheck(args []string) error {
 	return nil
 }
 
+// cmdXDPDetach removes the pinned XDP filter. The agent never does this on its own.
+func cmdXDPDetach(args []string) error {
+	fs := flag.NewFlagSet("xdp-detach", flag.ExitOnError)
+	cfg, err := loadConfig(fs, args)
+	if err != nil {
+		return err
+	}
+	m, err := xdp.Load()
+	if err != nil {
+		return err
+	}
+	defer m.Close()
+	if err := m.Detach(cfg.XDPPinDir, cfg.XDPInterfaces); err != nil {
+		return err
+	}
+	fmt.Println("XDP-Filter entfernt")
+	return nil
+}
+
 func cmdRun(args []string, log *slog.Logger) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	cfg, err := loadConfig(fs, args)
@@ -121,6 +144,11 @@ func cmdRun(args []string, log *slog.Logger) error {
 	a, err := agent.New(cfg, log, app, agent.HostSampler(cfg.UplinkInterfaces), client)
 	if err != nil {
 		return err
+	}
+	if m, err := enableXDP(cfg, a, log); err != nil {
+		log.Error("xdp nicht aktiviert, nftables-Schutz läuft weiter", "err", err)
+	} else if m != nil {
+		defer m.Close() // pinned links stay attached; only the process handles are released
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
