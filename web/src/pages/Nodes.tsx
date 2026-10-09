@@ -141,6 +141,27 @@ function NodeDetail({ user, nodeId, onBack }: { user: User; nodeId: string; onBa
       {node.health.errors && node.health.errors.length > 0 && (
         <div className="rounded border border-amber-700/50 bg-amber-950/30 px-3 py-2 text-sm text-amber-200">{node.health.errors.join(" · ")}</div>
       )}
+      {node.guards && node.guards.length > 0 && (
+        <Card title="Minecraft-Guards">
+          <div className="space-y-2 text-sm">
+            {node.guards.map((g) => (
+              <div key={g.name} className="flex flex-wrap gap-x-4 gap-y-1 text-slate-300">
+                <span className="font-medium text-slate-100">{g.name}</span>
+                {!g.reachable ? <span className="text-rose-300">nicht erreichbar</span> : (
+                  <>
+                    <span>{g.active} aktive Verbindungen</span>
+                    <span>{g.handshake_ok_ps.toFixed(1)} gültige Handshakes/s</span>
+                    <span>{g.status_pings_ps.toFixed(1)} Pings/s</span>
+                    <span>{g.invalid_ps.toFixed(1)} ungültig/s</span>
+                    <span>{g.rate_limited_ps.toFixed(1)} begrenzt/s</span>
+                    <span>{g.bans} Sperren aktiv ({g.bans_issued} gesamt)</span>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
       {node.sync_error && <div className="text-sm text-rose-300">Synchronisierung: {node.sync_error}</div>}
 
       <Card title="Betriebsmodus">

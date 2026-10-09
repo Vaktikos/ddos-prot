@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -190,7 +191,12 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatal("ein verbrauchter Enrollment-Token darf nicht erneut funktionieren")
 	}
 
-	agentCfg := agent.Config{PanelURL: base, StateDir: stateDir, NftTable: "sentinel_shield",
+	guardSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"version":"0.1.0","active":7,"accepted":10,"bans":[],"bans_issued":3}`))
+	}))
+	defer guardSrv.Close()
+	agentCfg := agent.Config{PanelURL: base, MinecraftGuards: []agent.GuardConfig{{Name: "mc", StatsURL: guardSrv.URL + "/stats", Target: "192.0.2.10/32"}},
+		StateDir: stateDir, NftTable: "sentinel_shield",
 		ManagementCIDRs: []string{"203.0.113.10/32"}, HeartbeatSeconds: 30, DetectMillis: 1000, ApprovalTimeoutS: 900}
 	client, err := agent.NewPanelClient(base, "")
 	if err != nil {
@@ -219,6 +225,17 @@ func TestEndToEnd(t *testing.T) {
 	_ = json.Unmarshal(body, &n)
 	if n.AppliedPolicyVersion != 1 || n.Status != "online" || n.SyncStatus != "synced" {
 		t.Fatalf("node nach Synchronisierung: applied=%d status=%s sync=%s", n.AppliedPolicyVersion, n.Status, n.SyncStatus)
+	}
+	ag.Tick(now)
+	if err := ag.Heartbeat(ctx, now); err != nil {
+		t.Fatalf("heartbeat mit guard: %v", err)
+	}
+	code, body = admin.call(http.MethodGet, "/api/v1/nodes/"+nodeID, nil)
+	mustOK(t, "node lesen", code, body, http.StatusOK)
+	var gn NodeDTO
+	_ = json.Unmarshal(body, &gn)
+	if !strings.Contains(string(gn.Guards), `"name":"mc"`) || !strings.Contains(string(gn.Guards), `"active":7`) {
+		t.Fatalf("Guard-Bericht fehlt im Panel: %s", gn.Guards)
 	}
 	if !strings.Contains(rules.last(), "table inet sentinel_shield") {
 		t.Fatal("Agent hat die signierte Policy nicht in die Firewall übernommen")

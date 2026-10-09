@@ -162,7 +162,16 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 		RETURNING desired_policy_version, rotate_key_requested`,
 		nodeID, status, hb.Hostname, hb.AgentVersion, string(healthJSON), hb.AppliedPolicyVersion, now, hb.PolicyError).Scan(&desired, &rotate)
 	if err == nil {
-		_, err = tx.Exec(ctx, `UPDATE nodes SET trusted_key_ids = $2::text[] WHERE id = $1::uuid`, nodeID, normalizeKeyIDs(hb.TrustedKeyIDs))
+		guards := hb.Guards
+		if len(guards) > 16 {
+			guards = guards[:16]
+		}
+		if guards == nil {
+			guards = []agent.GuardReport{}
+		}
+		guardsJSON, _ := json.Marshal(guards)
+		_, err = tx.Exec(ctx, `UPDATE nodes SET trusted_key_ids = $2::text[], guards = $3::jsonb WHERE id = $1::uuid`,
+			nodeID, normalizeKeyIDs(hb.TrustedKeyIDs), string(guardsJSON))
 	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "interner Fehler")

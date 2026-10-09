@@ -6,7 +6,7 @@ import type { Profile, User } from "../types";
 type Config = Profile["config"];
 
 const generic: Config = {
-  total_pps: 100000, syn_pps: 20000, udp_pps: 50000, icmp_pps: 5000, conn_pps: 0, frag_pps: 0, invalid_pps: 0,
+  total_pps: 100000, syn_pps: 20000, udp_pps: 50000, icmp_pps: 5000, conn_pps: 0, frag_pps: 0, invalid_pps: 0, protocol_abuse_pps: 0,
   confirm_seconds: 5, clear_seconds: 30,
   mitigation: { syn_rate_per_source: 100, udp_rate_per_source: 500, auto_block_seconds: 300, drop_fragments: false, drop_invalid: false },
 };
@@ -14,7 +14,7 @@ const generic: Config = {
 // Starting point for Minecraft Java: new connections per port are limited, and established
 // traffic is not counted as an attack. Values must be tuned to the server's real player load.
 const minecraft: Config = {
-  total_pps: 60000, syn_pps: 400, udp_pps: 0, icmp_pps: 2000, conn_pps: 60, frag_pps: 0, invalid_pps: 0,
+  total_pps: 60000, syn_pps: 400, udp_pps: 0, icmp_pps: 2000, conn_pps: 60, frag_pps: 0, invalid_pps: 0, protocol_abuse_pps: 0,
   confirm_seconds: 5, clear_seconds: 20,
   mitigation: { syn_rate_per_source: 30, udp_rate_per_source: 0, auto_block_seconds: 120, drop_fragments: false, drop_invalid: false },
 };
@@ -27,6 +27,7 @@ const numberFields: { key: keyof Omit<Config, "mitigation">; label: string; hint
   { key: "conn_pps", label: "Neue Verbindungen/s je Port", hint: "z. B. Minecraft" },
   { key: "frag_pps", label: "Fragmente/s", hint: "" },
   { key: "invalid_pps", label: "Ungültige Flags/s", hint: "" },
+  { key: "protocol_abuse_pps", label: "Protokollverstöße/s (Minecraft-Guard)", hint: "ungültige Handshakes, gesperrte Quellen" },
   { key: "confirm_seconds", label: "Haltezeit (s)", hint: "bis bestätigt" },
   { key: "clear_seconds", label: "Abklingzeit (s)", hint: "bis beendet" },
 ];

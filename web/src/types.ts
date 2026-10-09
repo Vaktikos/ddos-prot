@@ -4,6 +4,19 @@ export interface User {
   role: "viewer" | "operator" | "admin";
 }
 
+export interface GuardReport {
+  name: string;
+  reachable: boolean;
+  active: number;
+  handshake_ok_ps: number;
+  invalid_ps: number;
+  rate_limited_ps: number;
+  banned_drops_ps: number;
+  status_pings_ps: number;
+  bans: number;
+  bans_issued: number;
+}
+
 export interface Node {
   id: string;
   name: string;
@@ -14,6 +27,7 @@ export interface Node {
   agent_version: string;
   management_cidrs: string[];
   health: { status?: string; errors?: string[] };
+  guards: GuardReport[];
   applied_policy_version: number;
   desired_policy_version: number;
   sync_status: "never" | "pending" | "synced" | "failed";
@@ -72,6 +86,7 @@ export interface Profile {
     conn_pps: number;
     frag_pps: number;
     invalid_pps: number;
+    protocol_abuse_pps: number;
     confirm_seconds: number;
     clear_seconds: number;
     mitigation: {
