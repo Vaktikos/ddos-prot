@@ -40,6 +40,9 @@ const (
 	// packets with impossible flag combinations.
 	CategoryFragFlood    Category = "fragment_flood"
 	CategoryInvalidFlags Category = "invalid_flags"
+	// CategoryProtocolAbuse is a surge of malformed or banned-source connection attempts
+	// seen by a protocol-aware guard in front of a service.
+	CategoryProtocolAbuse Category = "protocol_abuse"
 )
 
 // Sample is a counter delta for one target over Interval.
@@ -53,6 +56,7 @@ type Sample struct {
 	ICMP     uint64
 	Frag     uint64 // IP fragments
 	Invalid  uint64 // TCP packets with invalid flag combinations
+	Abuse    uint64 // malformed or banned connection attempts counted by a guard
 }
 
 // Thresholds mirror the relevant fields of a protection profile.
@@ -64,6 +68,7 @@ type Thresholds struct {
 	ConnPPS            float64 // new connection attempts per second on one service
 	FragPPS            float64
 	InvalidPPS         float64
+	AbusePPS           float64
 	BaselineMultiplier float64
 	MinPPS             float64
 	ConfirmSeconds     int
@@ -153,7 +158,7 @@ func (e *Engine) Observe(target string, s Sample, th Thresholds) ([]Change, erro
 
 	abs, absCat := absoluteHit(th, rates{
 		pps: pps, syn: synPPS, udp: udpPPS, icmp: icmpPPS,
-		frag: float64(s.Frag) / sec, invalid: float64(s.Invalid) / sec,
+		frag: float64(s.Frag) / sec, invalid: float64(s.Invalid) / sec, abuse: float64(s.Abuse) / sec,
 	})
 	adaptive := false
 	if !abs && th.BaselineMultiplier > 0 && st.baselineN >= baselineWarmup {
@@ -239,11 +244,13 @@ func (e *Engine) Forget(target string, now time.Time) (Change, bool) {
 }
 
 // rates are per-second values of one sample.
-type rates struct{ pps, syn, udp, icmp, frag, invalid float64 }
+type rates struct{ pps, syn, udp, icmp, frag, invalid, abuse float64 }
 
 func absoluteHit(th Thresholds, r rates) (bool, Category) {
 	pps, syn, udp, icmp := r.pps, r.syn, r.udp, r.icmp
 	switch {
+	case th.AbusePPS > 0 && r.abuse >= th.AbusePPS:
+		return true, CategoryProtocolAbuse
 	case th.InvalidPPS > 0 && r.invalid >= th.InvalidPPS:
 		return true, CategoryInvalidFlags
 	case th.FragPPS > 0 && r.frag >= th.FragPPS:

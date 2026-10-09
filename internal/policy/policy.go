@@ -79,6 +79,9 @@ type Profile struct {
 	// combinations (null, xmas, SYN+FIN, SYN+RST, FIN without ACK) per target.
 	FragPPS    float64 `json:"frag_pps"`
 	InvalidPPS float64 `json:"invalid_pps"`
+	// ProtocolAbusePPS flags malformed or banned-source connection attempts per second reported
+	// by a Minecraft guard in front of the service (see internal/mcguard).
+	ProtocolAbusePPS float64 `json:"protocol_abuse_pps"`
 
 	// Adaptive detection: a hit when pps >= max(MinPPS, baseline*BaselineMultiplier).
 	BaselineMultiplier float64 `json:"baseline_multiplier"`
@@ -328,7 +331,7 @@ func validateProfile(name string, prof Profile) []error {
 	for label, v := range map[string]float64{
 		"total_pps": prof.TotalPPS, "syn_pps": prof.SYNPPS, "udp_pps": prof.UDPPPS,
 		"icmp_pps": prof.ICMPPPS, "min_pps": prof.MinPPS, "conn_pps": prof.ConnPPS,
-		"frag_pps": prof.FragPPS, "invalid_pps": prof.InvalidPPS,
+		"frag_pps": prof.FragPPS, "invalid_pps": prof.InvalidPPS, "protocol_abuse_pps": prof.ProtocolAbusePPS,
 	} {
 		if v < 0 {
 			add("%s darf nicht negativ sein", label)
@@ -343,7 +346,7 @@ func validateProfile(name string, prof Profile) []error {
 	if prof.ClearSeconds < 1 || prof.ClearSeconds > 900 {
 		add("clear_seconds muss zwischen 1 und 900 liegen")
 	}
-	if prof.TotalPPS == 0 && prof.SYNPPS == 0 && prof.UDPPPS == 0 && prof.ICMPPPS == 0 && prof.ConnPPS == 0 && prof.FragPPS == 0 && prof.InvalidPPS == 0 && prof.BaselineMultiplier == 0 {
+	if prof.TotalPPS == 0 && prof.SYNPPS == 0 && prof.UDPPPS == 0 && prof.ICMPPPS == 0 && prof.ConnPPS == 0 && prof.FragPPS == 0 && prof.InvalidPPS == 0 && prof.ProtocolAbusePPS == 0 && prof.BaselineMultiplier == 0 {
 		add("mindestens ein Erkennungsschwellwert muss gesetzt sein")
 	}
 	m := prof.Mitigation

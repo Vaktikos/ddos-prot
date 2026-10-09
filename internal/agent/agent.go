@@ -85,6 +85,8 @@ type Heartbeat struct {
 	DroppedEvents        uint64          `json:"dropped_events"`
 	// TrustedKeyIDs are the panel signing keys this agent currently trusts.
 	TrustedKeyIDs []string `json:"trusted_key_ids"`
+	// Guards is the state of the local Minecraft guards, if any.
+	Guards []GuardReport `json:"guards"`
 }
 
 // HostReport holds rates computed from /proc and the uplink counters.
@@ -166,6 +168,7 @@ type Agent struct {
 	hostAt       time.Time
 	applyDirty   bool
 	xdp          XDPFilter
+	guards       []*guardState
 	panelAddrs   []netip.Addr
 	panelAddrsAt time.Time
 	xdpActive    bool
@@ -187,12 +190,14 @@ func New(cfg Config, log *slog.Logger, rules Ruleset, host HostSource, client *P
 	if err != nil {
 		return nil, err
 	}
-	return &Agent{
+	a := &Agent{
 		cfg: cfg, log: log, client: client, store: st,
 		nodeID: nf.NodeID, priv: priv, panel: pub, keyset: nf.KeysetIssuedAt, mgmt: mgmt,
 		rules: rules, host: host, now: time.Now,
 		engine: detect.NewEngine(nil), targets: map[string]TargetReport{},
-	}, nil
+	}
+	a.initGuards()
+	return a, nil
 }
 
 // Bootstrap adopts the cached policy so the node protects itself before the panel answers.
@@ -315,6 +320,7 @@ func (a *Agent) activeMitigations() []nft.Active {
 func (a *Agent) Tick(now time.Time) {
 	a.expireApprovals(now)
 	a.sampleHost(now)
+	a.stepGuards(now)
 	a.stepXDP(now)
 	a.sampleXDPStats(now)
 	if a.pol == nil {
@@ -579,7 +585,7 @@ func (a *Agent) sendHeartbeat(ctx context.Context, now time.Time) (HeartbeatRepl
 		Mode: a.modeOrDefault(), AppliedPolicyVersion: a.applied, PolicyError: a.policyErr,
 		Host: a.hostWithXDP(), Targets: a.targetList(), Mitigations: a.plans,
 		DynamicEntries: a.dynEntries, Health: a.health(), Events: a.pendingEvents(),
-		DroppedEvents: a.dropped, TrustedKeyIDs: a.trustedKeyIDs(),
+		DroppedEvents: a.dropped, TrustedKeyIDs: a.trustedKeyIDs(), Guards: a.guardReports(),
 	}
 	reply, err := a.client.Heartbeat(ctx, a.nodeID, a.priv, hb)
 	if err != nil && a.promoteNextKey(err) {

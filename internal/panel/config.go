@@ -27,6 +27,7 @@ type Config struct {
 	TLSKey       string
 	SigningKey   string
 	WebDir       string
+	DownloadDir  string // agent binaries and SHA256SUMS served to the installer
 	CookieSecure bool
 	SessionHours int
 	SeedEmail    string
@@ -55,6 +56,7 @@ func LoadConfig() (Config, error) {
 		TLSKey:       env("PANEL_TLS_KEY", ""),
 		SigningKey:   env("PANEL_SIGNING_KEY_FILE", "/var/lib/sentinel-panel/signing.key"),
 		WebDir:       env("PANEL_WEB_DIR", ""),
+		DownloadDir:  env("PANEL_DOWNLOAD_DIR", ""),
 		CookieSecure: env("PANEL_COOKIE_SECURE", "true") != "false",
 		SessionHours: envInt("PANEL_SESSION_HOURS", 12),
 		SeedEmail:    env("PANEL_ADMIN_EMAIL", ""),

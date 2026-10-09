@@ -3,6 +3,11 @@ import { api, fmt } from "../api";
 import { Badge, Button, Card, Empty, Table } from "../components/ui";
 import type { Node, PolicyVersion, Profile, Rule, Target, User } from "../types";
 
+// The one-line installer served by this panel; the token is single use and expires in 24 hours.
+function installCommand(token: string): string {
+  return `curl -fsSL ${window.location.origin}/install.sh | sudo -E bash -s -- --token ${token} --management-cidr auto`;
+}
+
 export default function NodesPage({ user, nodeId, onOpen }: { user: User; nodeId: string | null; onOpen: (id: string | null) => void }) {
   if (nodeId) return <NodeDetail user={user} nodeId={nodeId} onBack={() => onOpen(null)} />;
   return <NodeList user={user} onOpen={onOpen} />;
@@ -69,7 +74,12 @@ function NodeList({ user, onOpen }: { user: User; onOpen: (id: string) => void }
             <div className="mt-4 rounded border border-amber-600/50 bg-amber-950/30 p-3 text-sm">
               <div className="font-medium text-amber-200">Enrollment-Token für {created.name} (wird nur einmal angezeigt, 24 h gültig)</div>
               <code className="mt-2 block break-all font-mono text-xs text-amber-100">{created.token}</code>
-              <pre className="mt-2 overflow-x-auto rounded bg-slate-950 p-2 text-xs text-slate-300">{`sudo sentinel-agent enroll --config /etc/sentinel-shield/agent.json --token ${created.token}`}</pre>
+              <div className="mt-3 text-xs text-amber-200">Auf dem Server als Administrator ausführen (lädt den Agent von diesem Panel, prüft die Prüfsumme, richtet alles ein und startet den Dienst):</div>
+              <pre className="mt-1 overflow-x-auto rounded bg-slate-950 p-2 text-xs text-slate-300">{installCommand(created.token)}</pre>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Button onClick={() => navigator.clipboard?.writeText(installCommand(created.token))}>Befehl kopieren</Button>
+                <span className="text-xs text-slate-400">`--management-cidr auto` sperrt die Adresse Ihrer aktuellen SSH-Sitzung nie aus. Eine andere Adresse mit `--management-cidr 203.0.113.10/32`. Optional: `--xdp auto` für den XDP-Filter. Bei selbstsigniertem Zertifikat zusätzlich `--ca-file /pfad/panel-ca.pem`.</span>
+              </div>
             </div>
           )}
         </Card>

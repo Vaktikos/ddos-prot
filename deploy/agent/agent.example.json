@@ -1,12 +1,1 @@
-{
-  "panel_url": "https://panel.example.net:8443",
-  "ca_file": "",
-  "state_dir": "/var/lib/sentinel-shield",
-  "nft_binary": "/usr/sbin/nft",
-  "nft_table": "sentinel_shield",
-  "uplink_interfaces": ["eth0"],
-  "management_cidrs": ["203.0.113.10/32"],
-  "heartbeat_seconds": 30,
-  "detect_interval_ms": 1000,
-  "approval_timeout_seconds": 900
-}
+../../internal/panel/assets/agent.example.json

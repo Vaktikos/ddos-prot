@@ -1,0 +1,23 @@
+{
+  "listen": "0.0.0.0:25565",
+  "backend": "127.0.0.1:25566",
+  "proxy_protocol": false,
+
+  "handshake_timeout_ms": 5000,
+  "idle_after_handshake_ms": 10000,
+
+  "max_connections": 4000,
+  "max_per_source": 30,
+  "new_conn_per_second": 10,
+  "new_conn_burst": 30,
+  "status_pings_per_minute": 60,
+
+  "ban_after_invalid": 5,
+  "ban_window_seconds": 60,
+  "ban_seconds": 600,
+
+  "allowed_hosts": [],
+  "allow_cidrs": ["203.0.113.10/32"],
+
+  "stats_listen": "127.0.0.1:9199"
+}

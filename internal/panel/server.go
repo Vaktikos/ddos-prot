@@ -153,6 +153,9 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /agent/v1/policy", a.agentPolicy)
 	mux.HandleFunc("POST /agent/v1/rotate-key", a.agentRotateKey)
 
+	mux.HandleFunc("GET /install.sh", a.installScript)
+	mux.HandleFunc("GET /download/{name}", a.download)
+
 	mux.HandleFunc("GET /healthz", a.healthz)
 	mux.HandleFunc("GET /readyz", a.readyz)
 
@@ -187,7 +190,8 @@ func (a *App) securityHeaders(next http.Handler) http.Handler {
 func (a *App) withStatic(api http.Handler) http.Handler {
 	files := http.FileServer(http.Dir(a.cfg.WebDir))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/agent/") || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/agent/") || strings.HasPrefix(r.URL.Path, "/download/") ||
+			r.URL.Path == "/install.sh" || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
 			api.ServeHTTP(w, r)
 			return
 		}
