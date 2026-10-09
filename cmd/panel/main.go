@@ -4,11 +4,14 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -40,11 +43,36 @@ func run(log *slog.Logger) error {
 	if err := store.Migrate(ctx, db); err != nil {
 		return err
 	}
-	pub, priv, err := panel.LoadOrCreateSigningKey(cfg.SigningKey)
+	sg, err := panel.BuildSigner(cfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("signer %q: %w", cfg.Signer, err)
 	}
-	app, err := panel.New(cfg, db, log, pub, priv)
+	log.Info("signatur-backend bereit", "backend", sg.Describe())
+	var app *panel.App
+	if cfg.Signer == "file" && cfg.DataKeyFile == "" && cfg.NextPublicKey == "" {
+		// Single-key setups keep working unchanged: MFA secrets stay tied to the signing key.
+		_, priv, kerr := panel.LoadOrCreateSigningKey(cfg.SigningKey)
+		if kerr != nil {
+			return kerr
+		}
+		app, err = panel.New(cfg, db, log, sg.Public(), priv)
+	} else {
+		dkPath := cfg.DataKeyFile
+		if dkPath == "" {
+			dkPath = filepath.Join(filepath.Dir(cfg.SigningKey), "data.key")
+		}
+		dataKey, kerr := panel.LoadOrCreateDataKey(dkPath)
+		if kerr != nil {
+			return kerr
+		}
+		var next ed25519.PublicKey
+		if cfg.NextPublicKey != "" {
+			if next, kerr = panel.DecodePublicKey(cfg.NextPublicKey); kerr != nil {
+				return fmt.Errorf("PANEL_NEXT_SIGNING_PUBLIC_KEY: %w", kerr)
+			}
+		}
+		app, err = panel.NewWithSigner(cfg, db, log, sg, dataKey, next)
+	}
 	if err != nil {
 		return err
 	}

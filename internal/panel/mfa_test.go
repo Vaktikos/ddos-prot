@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -45,7 +46,7 @@ func TestTOTPRejectsReplayAndOutOfWindow(t *testing.T) {
 
 func TestSecretSealRoundTrip(t *testing.T) {
 	_, priv, _ := LoadOrCreateSigningKey(filepath.Join(t.TempDir(), "k"))
-	a := &App{priv: priv}
+	a := &App{legacy: legacyMFAKey(priv)}
 	enc, err := a.sealSecret([]byte("0123456789abcdef0123"))
 	if err != nil {
 		t.Fatal(err)
@@ -56,6 +57,51 @@ func TestSecretSealRoundTrip(t *testing.T) {
 	dec, err := a.openSecret(enc)
 	if err != nil || string(dec) != "0123456789abcdef0123" {
 		t.Fatalf("Entschlüsselung fehlgeschlagen: %v", err)
+	}
+}
+
+func TestDataKeyIsIndependentOfSigningKeyAndLegacySecretsStayReadable(t *testing.T) {
+	_, priv, _ := LoadOrCreateSigningKey(filepath.Join(t.TempDir(), "k"))
+	dataKey, err := LoadOrCreateDataKey(filepath.Join(t.TempDir(), "data.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A secret sealed the old way (derived from the signing seed).
+	old := &App{legacy: legacyMFAKey(priv)}
+	oldEnc, _ := old.sealSecret([]byte("legacy-secret-0123456"))
+
+	upgraded := &App{dataKey: dataKey, legacy: legacyMFAKey(priv)}
+	if dec, err := upgraded.openSecret(oldEnc); err != nil || string(dec) != "legacy-secret-0123456" {
+		t.Fatalf("alte Geheimnisse müssen lesbar bleiben: %v", err)
+	}
+	newEnc, _ := upgraded.sealSecret([]byte("fresh-secret-0123456"))
+
+	// With an HSM there is no seed: only the data key exists, and old secrets are unreadable.
+	hsm := &App{dataKey: dataKey}
+	if dec, err := hsm.openSecret(newEnc); err != nil || string(dec) != "fresh-secret-0123456" {
+		t.Fatalf("neue Geheimnisse brauchen nur den Datenschlüssel: %v", err)
+	}
+	if _, err := hsm.openSecret(oldEnc); err == nil {
+		t.Fatal("ohne Altschlüssel darf ein altes Geheimnis nicht lesbar sein")
+	}
+}
+
+func TestDataKeyFileIsCreatedPrivateAndRejectsOpenPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "d", "data.key")
+	k1, err := LoadOrCreateDataKey(path)
+	if err != nil || len(k1) != 32 {
+		t.Fatalf("anlegen: %v", err)
+	}
+	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+		t.Fatalf("Rechte = %v", info.Mode().Perm())
+	}
+	k2, _ := LoadOrCreateDataKey(path)
+	if string(k1) != string(k2) {
+		t.Fatal("der zweite Start muss denselben Schlüssel laden")
+	}
+	_ = os.Chmod(path, 0o644)
+	if _, err := LoadOrCreateDataKey(path); err == nil {
+		t.Fatal("zu offene Rechte müssen abgelehnt werden")
 	}
 }
 
@@ -121,5 +167,105 @@ func TestMFALoginFlow(t *testing.T) {
 	code, body = admin.call(http.MethodPost, "/api/v1/auth/login", map[string]string{"email": cfg.SeedEmail, "password": cfg.SeedPassword, "otp": good})
 	if code == http.StatusOK && strings.Contains(string(body), "csrf_token") {
 		t.Fatal("verbrauchter Code darf nicht erneut anmelden")
+	}
+}
+
+func TestRecoveryCodeFormatAndHashing(t *testing.T) {
+	codes, hashes, err := newRecoveryCodes()
+	if err != nil || len(codes) != recoveryCodeCount || len(hashes) != recoveryCodeCount {
+		t.Fatalf("Anzahl: %v", err)
+	}
+	seen := map[string]bool{}
+	for i, c := range codes {
+		if len(c) != 14 || c[4] != '-' || c[9] != '-' || seen[c] {
+			t.Fatalf("Format/Eindeutigkeit verletzt: %q", c)
+		}
+		seen[c] = true
+		// Entry is forgiving about case, dashes and spaces.
+		if string(hashRecoveryCode(strings.ToLower(strings.ReplaceAll(c, "-", " ")))) != string(hashes[i]) {
+			t.Fatalf("Normalisierung greift nicht für %q", c)
+		}
+	}
+}
+
+func TestMFARecoveryCodesFlow(t *testing.T) {
+	tp := startTestPanel(t)
+	c := tp.admin
+	code, body := c.call(http.MethodPost, "/api/v1/auth/mfa/enroll", nil)
+	mustOK(t, "einrichten", code, body, http.StatusOK)
+	var enroll struct {
+		Secret string `json:"secret"`
+	}
+	_ = json.Unmarshal(body, &enroll)
+	secret, _ := b32.DecodeString(enroll.Secret)
+
+	step := time.Now().Unix() / totpStep
+	code, body = c.call(http.MethodPost, "/api/v1/auth/mfa/enable", map[string]string{"code": totpAt(secret, step)})
+	mustOK(t, "aktivieren", code, body, http.StatusOK)
+	var enabled struct {
+		Codes []string `json:"recovery_codes"`
+	}
+	_ = json.Unmarshal(body, &enabled)
+	if len(enabled.Codes) != recoveryCodeCount {
+		t.Fatalf("beim Aktivieren müssen %d Codes ausgegeben werden: %s", recoveryCodeCount, body)
+	}
+
+	login := func(extra map[string]string) (int, string) {
+		cl := newAPIClient(t, tp.base)
+		payload := map[string]string{"email": tp.cfg.SeedEmail, "password": tp.cfg.SeedPassword}
+		for k, v := range extra {
+			payload[k] = v
+		}
+		code, b := cl.call(http.MethodPost, "/api/v1/auth/login", payload)
+		return code, string(b)
+	}
+
+	// A recovery code signs in once and not twice.
+	if code, b := login(map[string]string{"recovery_code": strings.ToLower(enabled.Codes[0])}); code != http.StatusOK || !strings.Contains(b, "csrf_token") {
+		t.Fatalf("Recovery-Code muss anmelden: %d %s", code, b)
+	}
+	if code, b := login(map[string]string{"recovery_code": enabled.Codes[0]}); code == http.StatusOK && strings.Contains(b, "csrf_token") {
+		t.Fatal("ein verbrauchter Recovery-Code darf nicht erneut gelten")
+	}
+	if code, b := login(map[string]string{"recovery_code": "AAAA-BBBB-CCCC"}); code != http.StatusUnauthorized {
+		t.Fatalf("unbekannter Code muss abgelehnt werden: %d %s", code, b)
+	}
+
+	// /auth/me reports how many are left.
+	code, body = c.call(http.MethodGet, "/api/v1/auth/me", nil)
+	mustOK(t, "me", code, body, http.StatusOK)
+	if !strings.Contains(string(body), `"recovery_codes_left":9`) || !strings.Contains(string(body), `"mfa_enabled":true`) {
+		t.Fatalf("9 verbleibende Codes erwartet: %s", body)
+	}
+
+	// Regenerating needs a valid TOTP code and invalidates the old set.
+	code, body = c.call(http.MethodPost, "/api/v1/auth/mfa/recovery", map[string]string{"code": "000000"})
+	mustOK(t, "falscher code", code, body, http.StatusUnauthorized)
+	code, body = c.call(http.MethodPost, "/api/v1/auth/mfa/recovery", map[string]string{"code": totpAt(secret, step+1)})
+	mustOK(t, "neu erzeugen", code, body, http.StatusOK)
+	var fresh struct {
+		Codes []string `json:"recovery_codes"`
+	}
+	_ = json.Unmarshal(body, &fresh)
+	if len(fresh.Codes) != recoveryCodeCount {
+		t.Fatalf("neuer Satz: %s", body)
+	}
+	if code, b := login(map[string]string{"recovery_code": enabled.Codes[1]}); code == http.StatusOK && strings.Contains(b, "csrf_token") {
+		t.Fatal("Codes des alten Satzes müssen ungültig sein")
+	}
+	if code, b := login(map[string]string{"recovery_code": fresh.Codes[0]}); code != http.StatusOK || !strings.Contains(b, "csrf_token") {
+		t.Fatalf("Code des neuen Satzes muss gelten: %d %s", code, b)
+	}
+
+	// Disabling MFA removes the codes.
+	// The replay guard allows one code per time step; reset it instead of waiting 30 seconds.
+	if _, err := tp.pool.Exec(context.Background(), `UPDATE users SET totp_last_step = 0`); err != nil {
+		t.Fatal(err)
+	}
+	code, body = c.call(http.MethodPost, "/api/v1/auth/mfa/disable", map[string]string{"code": totpAt(secret, time.Now().Unix()/totpStep)})
+	mustOK(t, "deaktivieren", code, body, http.StatusOK)
+	code, body = c.call(http.MethodGet, "/api/v1/auth/me", nil)
+	if !strings.Contains(string(body), `"recovery_codes_left":0`) {
+		t.Fatalf("nach dem Deaktivieren dürfen keine Codes übrig sein: %s", body)
 	}
 }

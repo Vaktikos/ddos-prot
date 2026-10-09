@@ -18,6 +18,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vaktikos/ddos-prot/internal/policy"
+	"github.com/vaktikos/ddos-prot/internal/signer"
 )
 
 // Roles, ordered by privilege.
@@ -35,7 +37,11 @@ type App struct {
 	db      *pgxpool.Pool
 	log     *slog.Logger
 	pub     ed25519.PublicKey
-	priv    ed25519.PrivateKey
+	sg      signer.Signer
+	nextPub ed25519.PublicKey
+	keyset  policy.SignedKeySet // announced to agents with each heartbeat
+	dataKey []byte              // encrypts stored MFA secrets
+	legacy  []byte              // pre-data-key MFA derivation, only to read old secrets
 	now     func() time.Time
 	origin  string
 	apiRL   *limiter
@@ -51,19 +57,39 @@ type Actor struct {
 	CSRF   string
 }
 
-// New creates the application.
+// New creates the application with a signing key held in memory. It keeps the old
+// behavior for tests and simple setups: MFA secrets use the key derived from the seed.
 func New(cfg Config, db *pgxpool.Pool, log *slog.Logger, pub ed25519.PublicKey, priv ed25519.PrivateKey) (*App, error) {
+	a, err := NewWithSigner(cfg, db, log, signer.FromKey(priv), nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	a.legacy = legacyMFAKey(priv)
+	return a, nil
+}
+
+// NewWithSigner creates the application with any signing backend. dataKey encrypts MFA
+// secrets; nextPub, if set, is announced to agents so the signing key can be rotated.
+func NewWithSigner(cfg Config, db *pgxpool.Pool, log *slog.Logger, sg signer.Signer, dataKey []byte, nextPub ed25519.PublicKey) (*App, error) {
 	u, err := url.Parse(cfg.PublicURL)
 	if err != nil || u.Host == "" {
 		return nil, fmt.Errorf("PANEL_PUBLIC_URL ungültig: %q", cfg.PublicURL)
 	}
-	return &App{
-		cfg: cfg, db: db, log: log, pub: pub, priv: priv, now: time.Now,
+	a := &App{
+		cfg: cfg, db: db, log: log, pub: sg.Public(), sg: sg, nextPub: nextPub, dataKey: dataKey, now: time.Now,
 		origin:  u.Scheme + "://" + u.Host,
 		apiRL:   newLimiter(20, 300),     // 20/s sustained, burst 300 per client
 		loginRL: newLimiter(10.0/60, 10), // 10 attempts per minute per client
 		agentRL: newLimiter(2, 120),      // per node: 2/s sustained, burst 120
-	}, nil
+	}
+	// A file signer exposes its seed; keep reading MFA secrets sealed the old way.
+	if sd, ok := sg.(interface{ Seed() []byte }); ok {
+		a.legacy = legacyMFAKeyFromSeed(sd.Seed())
+	}
+	if err := a.announceKeys(); err != nil {
+		return nil, err
+	}
+	return a, nil
 }
 
 // Handler builds the HTTP routing table and middleware chain.
@@ -77,6 +103,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/mfa/enroll", a.withSession(RoleViewer, a.mfaEnroll))
 	mux.HandleFunc("POST /api/v1/auth/mfa/enable", a.withSession(RoleViewer, a.mfaEnable))
 	mux.HandleFunc("POST /api/v1/auth/mfa/disable", a.withSession(RoleViewer, a.mfaDisable))
+	mux.HandleFunc("POST /api/v1/auth/mfa/recovery", a.withSession(RoleViewer, a.mfaRegenerateRecovery))
 
 	// Read access (viewer and up)
 	mux.HandleFunc("GET /api/v1/dashboard", a.withSession(RoleViewer, a.dashboard))
@@ -96,6 +123,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/alerts", a.withSession(RoleViewer, a.listAlerts))
 	mux.HandleFunc("GET /api/v1/audit", a.withSession(RoleAdmin, a.listAudit))
 	mux.HandleFunc("GET /api/v1/users", a.withSession(RoleAdmin, a.listUsers))
+	mux.HandleFunc("GET /api/v1/signing", a.withSession(RoleAdmin, a.signingStatus))
 
 	// Operator actions
 	mux.HandleFunc("POST /api/v1/nodes/{id}/mode", a.withSession(RoleOperator, a.setMode))

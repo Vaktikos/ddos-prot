@@ -161,7 +161,7 @@ func (a *App) storePolicy(ctx context.Context, q querier, nodeID string, p *poli
 	if err := policy.Validate(p, mgmt); err != nil {
 		return err
 	}
-	env, err := policy.Sign(a.priv, p)
+	env, err := policy.SignWith(a.sg, a.sg.Public(), p)
 	if err != nil {
 		return err
 	}

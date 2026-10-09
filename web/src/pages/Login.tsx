@@ -9,6 +9,7 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
   const [busy, setBusy] = useState(false);
   const [otp, setOtp] = useState("");
   const [needsOtp, setNeedsOtp] = useState(false);
+  const [useRecovery, setUseRecovery] = useState(false);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -17,7 +18,7 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
     let awaitingOtp = false;
     try {
       const res = await api<{ user?: User; csrf_token?: string; mfa_required?: boolean }>("POST", "/api/v1/auth/login",
-        needsOtp ? { email, password, otp } : { email, password });
+        needsOtp ? (useRecovery ? { email, password, recovery_code: otp } : { email, password, otp }) : { email, password });
       if (res.mfa_required) {
         // Password was correct; keep it for the second request and ask for the code.
         awaitingOtp = true;
@@ -30,6 +31,7 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
       setError(err instanceof Error ? err.message : "Anmeldung fehlgeschlagen");
       setOtp("");
       setNeedsOtp(false);
+      setUseRecovery(false);
     } finally {
       setBusy(false);
       if (!awaitingOtp) setPassword("");
@@ -52,11 +54,21 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
           <input className="mt-1 w-full" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
         </label>
         {needsOtp && (
-          <label className="block text-sm">
-            <span className="text-slate-400">Code aus der Authenticator-App</span>
-            <input className="mt-1 w-full" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required autoFocus
-              value={otp} onChange={(e) => setOtp(e.target.value)} />
-          </label>
+          <div className="space-y-1 text-sm">
+            <label className="block">
+              <span className="text-slate-400">{useRecovery ? "Recovery-Code (einmalig verwendbar)" : "Code aus der Authenticator-App"}</span>
+              {useRecovery ? (
+                <input className="mt-1 w-full font-mono" autoComplete="off" maxLength={14} required autoFocus placeholder="XXXX-XXXX-XXXX"
+                  value={otp} onChange={(e) => setOtp(e.target.value)} />
+              ) : (
+                <input className="mt-1 w-full" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required autoFocus
+                  value={otp} onChange={(e) => setOtp(e.target.value)} />
+              )}
+            </label>
+            <button type="button" className="text-xs text-cyan-400 underline" onClick={() => { setUseRecovery(!useRecovery); setOtp(""); }}>
+              {useRecovery ? "Stattdessen Code aus der App verwenden" : "Gerät verloren? Recovery-Code verwenden"}
+            </button>
+          </div>
         )}
         {error && <div className="rounded border border-rose-700/50 bg-rose-950/40 px-3 py-2 text-sm text-rose-300">{error}</div>}
         <button disabled={busy} className="w-full rounded-md bg-cyan-600 px-3 py-2 text-sm font-medium text-white hover:bg-cyan-500 disabled:opacity-50">

@@ -16,7 +16,10 @@ import (
 // NodeFile is the enrollment result stored on the node.
 type NodeFile struct {
 	NodeID         string `json:"node_id"`
-	PanelPublicKey string `json:"panel_public_key"`
+	PanelPublicKey string `json:"panel_public_key"` // first trusted key; kept for older agents
+	// PanelPublicKeys is the full trusted set. Empty in files written by older versions.
+	PanelPublicKeys []string `json:"panel_public_keys,omitempty"`
+	KeysetIssuedAt  int64    `json:"keyset_issued_at,omitempty"`
 }
 
 // Paths of files in the state directory.
@@ -32,7 +35,7 @@ const (
 type Store struct{ Dir string }
 
 // LoadNode returns the enrollment data, or an error if the node is not enrolled.
-func (s Store) LoadNode() (NodeFile, ed25519.PrivateKey, ed25519.PublicKey, error) {
+func (s Store) LoadNode() (NodeFile, ed25519.PrivateKey, []ed25519.PublicKey, error) {
 	var nf NodeFile
 	raw, err := os.ReadFile(filepath.Join(s.Dir, nodeFileName))
 	if err != nil {
@@ -41,15 +44,23 @@ func (s Store) LoadNode() (NodeFile, ed25519.PrivateKey, ed25519.PublicKey, erro
 	if err := json.Unmarshal(raw, &nf); err != nil {
 		return nf, nil, nil, err
 	}
-	pubRaw, err := base64.StdEncoding.DecodeString(nf.PanelPublicKey)
-	if err != nil || len(pubRaw) != ed25519.PublicKeySize {
-		return nf, nil, nil, errors.New("panel_public_key ungültig")
+	encoded := nf.PanelPublicKeys
+	if len(encoded) == 0 {
+		encoded = []string{nf.PanelPublicKey} // file written before key sets existed
+	}
+	var pubs []ed25519.PublicKey
+	for _, e := range encoded {
+		raw, err := base64.StdEncoding.DecodeString(e)
+		if err != nil || len(raw) != ed25519.PublicKeySize {
+			return nf, nil, nil, errors.New("panel_public_key ungültig")
+		}
+		pubs = append(pubs, ed25519.PublicKey(raw))
 	}
 	priv, err := identity.LoadKey(filepath.Join(s.Dir, identityFileName))
 	if err != nil {
 		return nf, nil, nil, err
 	}
-	return nf, priv, ed25519.PublicKey(pubRaw), nil
+	return nf, priv, pubs, nil
 }
 
 // SaveNode writes the enrollment data atomically.

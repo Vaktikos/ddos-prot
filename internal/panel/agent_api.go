@@ -71,9 +71,10 @@ func (a *App) enroll(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "interner Fehler")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
-		"node_id":          nodeID,
-		"panel_public_key": base64.StdEncoding.EncodeToString(a.pub),
+	writeJSON(w, http.StatusOK, map[string]any{
+		"node_id":           nodeID,
+		"panel_public_key":  base64.StdEncoding.EncodeToString(a.pub),
+		"panel_public_keys": []string{base64.StdEncoding.EncodeToString(a.pub)},
 	})
 }
 
@@ -160,6 +161,9 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 		WHERE id = $1::uuid
 		RETURNING desired_policy_version, rotate_key_requested`,
 		nodeID, status, hb.Hostname, hb.AgentVersion, string(healthJSON), hb.AppliedPolicyVersion, now, hb.PolicyError).Scan(&desired, &rotate)
+	if err == nil {
+		_, err = tx.Exec(ctx, `UPDATE nodes SET trusted_key_ids = $2::text[] WHERE id = $1::uuid`, nodeID, normalizeKeyIDs(hb.TrustedKeyIDs))
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "interner Fehler")
 		return
@@ -218,6 +222,7 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reply.RotateKey = rotate
+	reply.TrustKeys = &a.keyset
 	if err := tx.Commit(ctx); err != nil {
 		writeErr(w, http.StatusInternalServerError, "interner Fehler")
 		return
@@ -457,4 +462,24 @@ func (a *App) agentPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, env)
+}
+
+// normalizeKeyIDs keeps only plausible key IDs (16 hex characters), at most four.
+func normalizeKeyIDs(in []string) []string {
+	out := []string{}
+	for _, id := range in {
+		if len(id) != 16 || len(out) >= 4 {
+			continue
+		}
+		ok := true
+		for _, c := range id {
+			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+				ok = false
+			}
+		}
+		if ok {
+			out = append(out, id)
+		}
+	}
+	return out
 }

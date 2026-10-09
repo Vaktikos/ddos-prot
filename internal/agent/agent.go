@@ -83,6 +83,8 @@ type Heartbeat struct {
 	Health               Health          `json:"health"`
 	Events               []Event         `json:"events"`
 	DroppedEvents        uint64          `json:"dropped_events"`
+	// TrustedKeyIDs are the panel signing keys this agent currently trusts.
+	TrustedKeyIDs []string `json:"trusted_key_ids"`
 }
 
 // HostReport holds rates computed from /proc and the uplink counters.
@@ -125,21 +127,25 @@ type HeartbeatReply struct {
 	RejectedPlanIDs      []string  `json:"rejected_plan_ids"`
 	ServerTime           time.Time `json:"server_time"`
 	RotateKey            bool      `json:"rotate_key"`
+	// TrustKeys is the signed list of panel keys agents may trust (see policy.KeySet).
+	TrustKeys *policy.SignedKeySet `json:"trust_keys,omitempty"`
 }
 
 // Agent holds all runtime state. It is driven by one goroutine (Run), so it needs no locks.
 type Agent struct {
-	cfg    Config
-	log    *slog.Logger
-	client *PanelClient
-	store  Store
-	nodeID string
-	priv   ed25519.PrivateKey
-	panel  ed25519.PublicKey
-	mgmt   []netip.Prefix
-	rules  Ruleset
-	host   HostSource
-	now    func() time.Time
+	cfg     Config
+	log     *slog.Logger
+	client  *PanelClient
+	store   Store
+	nodeID  string
+	priv    ed25519.PrivateKey
+	panel   []ed25519.PublicKey // trusted panel signing keys
+	keyset  int64               // IssuedAt of the last accepted key statement
+	keyBody string              // body of the last statement, to skip identical repeats
+	mgmt    []netip.Prefix
+	rules   Ruleset
+	host    HostSource
+	now     func() time.Time
 
 	engine    *detect.Engine
 	pol       *policy.Policy
@@ -183,7 +189,7 @@ func New(cfg Config, log *slog.Logger, rules Ruleset, host HostSource, client *P
 	}
 	return &Agent{
 		cfg: cfg, log: log, client: client, store: st,
-		nodeID: nf.NodeID, priv: priv, panel: pub, mgmt: mgmt,
+		nodeID: nf.NodeID, priv: priv, panel: pub, keyset: nf.KeysetIssuedAt, mgmt: mgmt,
 		rules: rules, host: host, now: time.Now,
 		engine: detect.NewEngine(nil), targets: map[string]TargetReport{},
 	}, nil
@@ -210,7 +216,7 @@ func (a *Agent) Bootstrap() {
 // adopt verifies an envelope, makes it the desired state and renders the firewall.
 // A rejected envelope leaves the previously applied state untouched.
 func (a *Agent) adopt(env policy.Envelope, source string) error {
-	p, err := policy.Open(a.panel, env, a.mgmt)
+	p, err := policy.OpenAny(a.panel, env, a.mgmt)
 	if err != nil {
 		return err
 	}
@@ -573,7 +579,7 @@ func (a *Agent) sendHeartbeat(ctx context.Context, now time.Time) (HeartbeatRepl
 		Mode: a.modeOrDefault(), AppliedPolicyVersion: a.applied, PolicyError: a.policyErr,
 		Host: a.hostWithXDP(), Targets: a.targetList(), Mitigations: a.plans,
 		DynamicEntries: a.dynEntries, Health: a.health(), Events: a.pendingEvents(),
-		DroppedEvents: a.dropped,
+		DroppedEvents: a.dropped, TrustedKeyIDs: a.trustedKeyIDs(),
 	}
 	reply, err := a.client.Heartbeat(ctx, a.nodeID, a.priv, hb)
 	if err != nil && a.promoteNextKey(err) {
@@ -586,6 +592,9 @@ func (a *Agent) sendHeartbeat(ctx context.Context, now time.Time) (HeartbeatRepl
 		return reply, err
 	}
 	a.outbox = a.outbox[len(hb.Events):]
+	if reply.TrustKeys != nil {
+		a.applyKeySet(*reply.TrustKeys)
+	}
 	a.applyDecisions(reply)
 	if reply.RotateKey {
 		if err := a.rotateKey(ctx); err != nil {
@@ -896,4 +905,38 @@ func (a *Agent) hostWithXDP() HostReport {
 		h.XDPBlocks = a.xdp.BlockCount()
 	}
 	return h
+}
+
+func (a *Agent) trustedKeyIDs() []string {
+	ids := make([]string, 0, len(a.panel))
+	for _, k := range a.panel {
+		ids = append(ids, policy.KeyID(k))
+	}
+	return ids
+}
+
+// applyKeySet adopts a new set of trusted panel keys. The statement must be signed by a key
+// that is already trusted and must be newer than the last one, so a captured old statement
+// cannot bring a retired key back.
+func (a *Agent) applyKeySet(sks policy.SignedKeySet) {
+	if sks.Body == a.keyBody {
+		return // the panel repeats the same statement with every heartbeat
+	}
+	ks, keys, err := policy.VerifyKeySet(a.panel, sks, a.keyset)
+	if err != nil {
+		a.log.Warn("schlüsselmenge des Panels abgelehnt", "err", err)
+		a.emit("policy", "keyset_rejected", map[string]string{"error": err.Error()})
+		return
+	}
+	nf := NodeFile{NodeID: a.nodeID, PanelPublicKey: encodeB64(keys[0]), KeysetIssuedAt: ks.IssuedAt}
+	for _, k := range keys {
+		nf.PanelPublicKeys = append(nf.PanelPublicKeys, encodeB64(k))
+	}
+	if err := a.store.SaveNode(nf); err != nil {
+		a.log.Error("schlüsselmenge nicht speicherbar, bleibe bei der alten", "err", err)
+		return
+	}
+	a.panel, a.keyset, a.keyBody = keys, ks.IssuedAt, sks.Body
+	a.emit("policy", "keyset_updated", map[string]any{"keys": a.trustedKeyIDs()})
+	a.log.Info("vertrauenswürdige Panel-Schlüssel aktualisiert", "keys", a.trustedKeyIDs())
 }

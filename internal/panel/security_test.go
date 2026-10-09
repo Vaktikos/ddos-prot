@@ -3,6 +3,7 @@ package panel
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,8 +11,12 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vaktikos/ddos-prot/internal/signer"
 
 	"github.com/vaktikos/ddos-prot/internal/agent"
 	"github.com/vaktikos/ddos-prot/internal/identity"
@@ -20,10 +25,25 @@ import (
 )
 
 type testPanel struct {
-	base  string
-	cfg   Config
-	app   *App
-	admin *apiClient
+	base    string
+	cfg     Config
+	app     *App
+	admin   *apiClient
+	pool    *pgxpool.Pool
+	handler atomic.Value // http.Handler; swapped to simulate a panel restart with other keys
+}
+
+// swapSigner replaces the running panel with one that signs with sg and announces next,
+// on the same database, like a restart with a changed configuration.
+func (tp *testPanel) swapSigner(t *testing.T, sg signer.Signer, next ed25519.PublicKey) {
+	t.Helper()
+	dk, _ := LoadOrCreateDataKey(filepath.Join(t.TempDir(), "dk"))
+	app, err := NewWithSigner(tp.cfg, tp.pool, slog.New(slog.NewTextHandler(io.Discard, nil)), sg, dk, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tp.app = app
+	tp.handler.Store(app.Handler())
 }
 
 // startTestPanel runs a panel on a random port against a freshly reset test database.
@@ -58,10 +78,13 @@ func startTestPanel(t *testing.T) *testPanel {
 	if err := app.EnsureSeedAdmin(ctx); err != nil {
 		t.Fatal(err)
 	}
-	srv := &http.Server{Handler: app.Handler()}
+	tp := &testPanel{base: base, cfg: cfg, app: app, pool: pool}
+	tp.handler.Store(app.Handler())
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tp.handler.Load().(http.Handler).ServeHTTP(w, r)
+	})}
 	go srv.Serve(ln)
 	t.Cleanup(func() { srv.Close() })
-	tp := &testPanel{base: base, cfg: cfg, app: app}
 	tp.admin = newAPIClient(t, base)
 	tp.admin.login(cfg.SeedEmail, cfg.SeedPassword)
 	return tp

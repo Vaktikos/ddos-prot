@@ -129,6 +129,7 @@ type Limits struct {
 
 // Envelope is what an agent receives: the exact signed body plus its signature.
 type Envelope struct {
+	KeyID     string `json:"key_id,omitempty"`
 	Version   int64  `json:"version"`
 	Body      string `json:"body"`
 	SHA256    string `json:"sha256"`
@@ -148,12 +149,21 @@ func Digest(body []byte) string {
 
 // Sign signs the body with the panel's Ed25519 key and returns an envelope.
 func Sign(priv ed25519.PrivateKey, p *Policy) (Envelope, error) {
+	return SignWith(FromPrivateKey(priv), priv.Public().(ed25519.PublicKey), p)
+}
+
+// SignWith signs through a Signer, so the private key may live in an HSM or KMS.
+func SignWith(s Signer, pub ed25519.PublicKey, p *Policy) (Envelope, error) {
 	body, err := Canonical(p)
 	if err != nil {
 		return Envelope{}, err
 	}
-	sig := ed25519.Sign(priv, body)
+	sig, err := s.Sign(body)
+	if err != nil {
+		return Envelope{}, fmt.Errorf("signieren fehlgeschlagen: %w", err)
+	}
 	return Envelope{
+		KeyID:     KeyID(pub),
 		Version:   p.Version,
 		Body:      string(body),
 		SHA256:    Digest(body),
@@ -165,11 +175,23 @@ func Sign(priv ed25519.PrivateKey, p *Policy) (Envelope, error) {
 // decoded, validated policy. Nothing from the envelope is trusted before the
 // signature check succeeds.
 func Open(pub ed25519.PublicKey, env Envelope, mgmt []netip.Prefix) (*Policy, error) {
+	return OpenAny([]ed25519.PublicKey{pub}, env, mgmt)
+}
+
+// OpenAny is Open for a set of trusted keys. The signature must verify under one of them.
+func OpenAny(pubs []ed25519.PublicKey, env Envelope, mgmt []netip.Prefix) (*Policy, error) {
 	sig, err := base64.StdEncoding.DecodeString(env.Signature)
 	if err != nil {
 		return nil, fmt.Errorf("signatur nicht dekodierbar: %w", err)
 	}
-	if len(pub) != ed25519.PublicKeySize || !ed25519.Verify(pub, []byte(env.Body), sig) {
+	verified := false
+	for _, pub := range pubs {
+		if len(pub) == ed25519.PublicKeySize && ed25519.Verify(pub, []byte(env.Body), sig) {
+			verified = true
+			break
+		}
+	}
+	if !verified {
 		return nil, errors.New("policy-signatur ungültig")
 	}
 	if Digest([]byte(env.Body)) != env.SHA256 {

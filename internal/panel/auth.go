@@ -124,6 +124,8 @@ type loginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 	OTP      string `json:"otp,omitempty"`
+	// RecoveryCode replaces the TOTP code when the authenticator device is lost.
+	RecoveryCode string `json:"recovery_code,omitempty"`
 }
 
 // dummyHash keeps the timing of unknown-user logins close to real ones.
@@ -171,19 +173,28 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	passwordOK := VerifyPassword(req.Password, hash)
 	usedStep := int64(-1)
 	if passwordOK && totpOn {
-		if req.OTP == "" {
+		if req.OTP == "" && req.RecoveryCode == "" {
 			// Password was right: ask for the second factor without counting a failure.
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(mfaRequiredBody())
 			return
 		}
-		secret, _, ok := a.userSecret(r, id)
-		if ok {
-			usedStep = verifyTOTP(secret, req.OTP, now, lastStep)
-		}
-		if usedStep < 0 {
-			passwordOK = false
+		if req.RecoveryCode != "" {
+			// A recovery code is consumed on use; a wrong one counts as a failed login.
+			if a.useRecoveryCode(ctx, id, req.RecoveryCode) {
+				a.audit(ctx, a.db, "user", id, "mfa.recovery_used", "user", id, nil, ipString(r))
+			} else {
+				passwordOK = false
+			}
+		} else {
+			secret, _, ok := a.userSecret(r, id)
+			if ok {
+				usedStep = verifyTOTP(secret, req.OTP, now, lastStep)
+			}
+			if usedStep < 0 {
+				passwordOK = false
+			}
 		}
 	}
 	if !passwordOK {
@@ -255,10 +266,14 @@ func (a *App) logout(w http.ResponseWriter, r *http.Request, actor Actor) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "abgemeldet"})
 }
 
-func (a *App) me(w http.ResponseWriter, _ *http.Request, actor Actor) {
+func (a *App) me(w http.ResponseWriter, r *http.Request, actor Actor) {
+	var mfa bool
+	_ = a.db.QueryRow(r.Context(), `SELECT totp_enabled FROM users WHERE id = $1::uuid`, actor.UserID).Scan(&mfa)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user":       map[string]string{"id": actor.UserID, "email": actor.Email, "role": actor.Role},
-		"csrf_token": actor.CSRF,
+		"user":                map[string]string{"id": actor.UserID, "email": actor.Email, "role": actor.Role},
+		"csrf_token":          actor.CSRF,
+		"mfa_enabled":         mfa,
+		"recovery_codes_left": a.recoveryCodesLeft(r.Context(), actor.UserID),
 	})
 }
 
