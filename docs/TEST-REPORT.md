@@ -78,6 +78,14 @@ Die Ziele stehen hier, damit sie überprüfbar bleiben. Der Status zeigt, was ge
 - **Gefundene und behobene Fehler:** abgelehnte Policy im Cache; fehlende Versionsprüfung beim Agent; verwaiste Vorfälle nach Entfernen eines Ziels; zu breite `trusted`- und Management-Netze; Login-Timing bei gesperrten Konten; doppelte Alarme je Vorfall; blockierende Migrationssperre bei kleinem Verbindungspool; Datenbank-Kollision zwischen parallelen Testpaketen; Dashboard-Absturz bei leerer Liste; Zähler-Unterlauf beim Host.
 - **Weitere Tests:** Konto-Sperre, Login-Ratenlimit, MFA, Schlüsselrotation samt Absturzfall, parallele Migrationen, Fragment-/Flag-Erkennung, conntrack-Warnung. UI-Ablauf (Profil anlegen, MFA einrichten, mit Code anmelden) im echten Chromium durchgespielt.
 
+## 5b. Ergänzungen: XDP, Guard, Layer 7, Signierer
+
+- **XDP** auf einem echten Kernel (`SS_XDP_INTEGRATION=1`): Laden, Anhängen, Sperren mit Ablauf, Allow-/Protect-Logik, Pinning. Dabei fiel auf, dass ein einzelnes fehlerhaftes Ereignis den Heartbeat abbrach; Ereignisse werden jetzt in Savepoints verarbeitet.
+- **mcguard:** Tests für gültige/ungültige Handshakes, Klassifizierung, Fuzz (`FuzzReadHandshake`), Weiterleitung, Sperren, Allow-Liste, Limits, Status-Pings, PROXY-Protokoll, Backend-Ausfall, viele parallele Spieler. Nicht gegen einen echten Minecraft-Server getestet.
+- **Agent/Guard/L7:** Tests mit Fake-Guard-Server und echter Logdatei: Vorfall wird eröffnet, nur starke Quellen gesperrt, Management-/Vertrauens-/Schutzadressen nie, nichts im Dry-Run, fehlender Guard/fehlendes Log → `degraded`. `internal/l7`: Parser (inkl. Fuzz), Rotation/Kürzen/Überspringen, begrenzte Quellenzahl.
+- **Panel:** Guard-/L7-Bericht im Heartbeat wird gespeichert und über die Node-API ausgeliefert (E2E); Installer-Test erzeugt eine vom Agent akzeptierte Konfiguration mit `--l7-log`/`--mc-guard`; Signierer-, Rotations-, Recovery-Code- und Download-Tests.
+- **Nicht geprüft:** Vault gegen einen echten Server, HSM/KMS, Docker-Build, systemd, Browser-Durchlauf der neuen Seiten (nur TypeScript-Compiler und Vite-Build).
+
 ## 6. Abhängigkeiten und Schwachstellen
 
 - Aktualisiert auf Go 1.27.2 (Go 1.24 ist nicht mehr unterstützt), `pgx` 5.11.0 (enthält die Korrektur für GO-2026-5004), `x/crypto` 0.58, `x/text` 0.43, `x/sys` 0.49, `x/sync` 0.24. Frontend: React 19, Vite 8, Tailwind 4, TypeScript 7.

@@ -2,7 +2,7 @@
 
 Eine DDoS-Schutzplattform für Hosting- und Datacenter-Betreiber: zentrales Webpanel, signierte Policies, Schutz-Agents auf den Servern, Erkennung und Mitigation über nftables.
 
-**Stand: Phase 1 (Kern).** Die Erkennung, die Mitigation, die Policy-Verteilung, das Panel und der Agent sind implementiert und getestet. Eine Liste dessen, was fehlt, steht unten und in `docs/TEST-REPORT.md`.
+**Stand: Kern plus XDP, Minecraft-Guard, Layer-7-Anbindung, Schlüsselrotation und Recovery-Codes.** Die Erkennung, die Mitigation, die Policy-Verteilung, das Panel und der Agent sind implementiert und getestet. Eine Liste dessen, was fehlt, steht unten und in `docs/TEST-REPORT.md`.
 
 ## Was funktioniert
 
@@ -11,16 +11,22 @@ Eine DDoS-Schutzplattform für Hosting- und Datacenter-Betreiber: zentrales Webp
 - **Web-UI** (`web/`): React, TypeScript, Tailwind, Dark Theme. Übersicht mit Durchsatz, pps, Verwerfungen, Nodes, Zielen und Verlaufsdiagrammen aus gespeicherten Messwerten; Nodes mit Modus, Zielen, Regeln und Policy-Versionen; Vorfälle mit Zeitverlauf; Freigaben und Alarme; Audit.
 - **Betrieb:** Docker-Compose-Stack für PostgreSQL und Panel; systemd-Unit für den Agent mit eingeschränkten Rechten; Installer für den Agent, der bestehende Firewall-Regeln nicht überschreibt.
 
-## Was (noch) nicht umgesetzt ist
+## Zusätzlich umgesetzt
 
-- eBPF/XDP-Pfad (Mitigation erfolgt in nftables)
-- Layer-7-Schutz (HTTP-Floods, Request-Muster): benötigt Reverse Proxy oder WAF
-- Protokollspezifische Minecraft-Erkennung (Handshake, Status-Pings). Verbindungsfluten auf einen Minecraft-Port werden erkannt (`conn_pps`, Beispiel in `deploy/profiles/`)
-- Weitere Protokollanomalien über ungültige TCP-Flags und Fragmente hinaus
-- Recovery-Codes für MFA
-- Rotation des Panel-Signaturschlüssels, HSM/KMS
-- Panel-Integration eines Reverse Proxys (nur eine nginx-Vorlage in `deploy/l7/`)
-- Produktionsmessungen (Fehlalarmrate, Last des Panels); siehe Testbericht
+- **XDP-Frühfilter** (`internal/xdp`, `--xdp` im Installer): Sperrlisten (LPM-Tries) im Kernel, Sperren laufen kernelseitig ab, Management-/Vertrauens-/Panel-Adressen werden nie gesperrt. Auf einem echten Kernel getestet (`SS_XDP_INTEGRATION=1`).
+- **Minecraft-Protokollprüfung** (`cmd/mcguard`, `docs/MINECRAFT.md`): Proxy mit Handshake-/Status-/Login-Prüfung, Limits je Quelle, automatische Sperren; der Agent liest dessen Statistik, erkennt `protocol_abuse` und spiegelt Sperren nach XDP.
+- **Layer-7-Integration** (`internal/l7`): Der Agent liest das Reject-Log des Reverse Proxys (nginx-Vorlage `deploy/l7/`), meldet Ablehnungsrate und Top-Quellen, erkennt `http_flood` und sperrt (Profil-Option `l7_source_rps`) hartnäckige Quellen über XDP. Das Panel zeigt den Zustand je Node.
+- **Signaturschlüssel**: austauschbare Signierer (Datei, externer Befehl, HashiCorp Vault Transit), Rotation mit vertrauenswürdigem Schlüsselsatz und zweistufigem Rollout (`docs/OPERATIONS.md`).
+- **MFA-Recovery-Codes** (einmalig, gehasht gespeichert).
+- **Einfache Einrichtung**: `scripts/install-panel.sh` (Panel, Compose) und `curl …/install.sh | sudo bash -s -- --token …` (Agent, mit SHA-256-Prüfung); das Panel liefert Binärdateien und Installer selbst aus.
+
+## Was (noch) nicht umgesetzt oder nicht belegt ist
+
+- Produktionsmessungen (Fehlalarmrate, Last des Panels, Wirkung unter realem Angriffsvolumen); siehe Testbericht
+- Docker-Build, systemd-Betrieb und Installation auf einem echten Debian/Ubuntu-Host sind nicht ausgeführt worden
+- Schutz gegen Sättigung der Leitung (nur beim Provider möglich), Layer-7-Regeln selbst (liegen im Reverse Proxy)
+- XDP/Layer-7-Sperren setzen echte Client-Adressen voraus (hinter CDN/Load Balancer `real_ip` konfigurieren)
+- Kein Vault-/KMS-Test gegen einen echten Dienst (Vault-Signierer nur gegen Testserver geprüft)
 
 ## Architektur in Kürze
 

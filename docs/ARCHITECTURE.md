@@ -44,6 +44,12 @@ Bei jedem Heartbeat wird eine Policy-Version gemeldet. Weicht sie von der gewün
 
 Ereignisse (Vorfälle, Maßnahmen, Alarme, Policy-Status) bleiben im Agent-Outbox, bis das Panel den Heartbeat bestätigt hat. Das Panel verarbeitet jedes Ereignis genau einmal (Primärschlüssel `(node_id, event_id)`), auch bei Wiederholungen. Pro Heartbeat werden höchstens 300 Ereignisse übertragen; ein Rückstau nach einem Ausfall wird über mehrere Heartbeats abgebaut.
 
+## Erweiterungen
+
+- **XDP** (`internal/xdp`, BPF-Quelle `bpf/filter.c`): Programm am Uplink, Allow-/Protect-/Block-Tries, Zähler je Quelle; der Agent (`internal/agent/xdp.go`) spiegelt Policy (Vertrauens-/Management-/Panel-Adressen als Allow, Ziele als Protect, manuelle Sperren) und sperrt bei bestätigten Vorfällen mit XDP-Plan die stärksten Quellen. Links werden gepinnt (überleben Agent-Neustart); ohne XDP laufen die nftables-Maßnahmen weiter.
+- **Guards und Layer 7** (`internal/agent/guard.go`, `l7.go`, `internal/mcguard`, `internal/l7`): lokale Datenquellen (Guard-Statistik über Loopback, Reject-Log) speisen dieselbe Erkennung (`protocol_abuse`, `http_flood`) und denselben Plan-Mechanismus (Dry-Run/Freigabe/Auto). Zustand je Node wird im Heartbeat gemeldet (`nodes.guards`, `nodes.l7`).
+- **Signierer** (`internal/signer`, `internal/policy/keyset.go`): Datei, Befehl oder Vault Transit; Agents vertrauen einem signierten Schlüsselsatz, so ist Rotation ohne Neu-Enrollment möglich.
+
 ## Datenmodell
 
 Migrationen liegen in `internal/store/migrations/` und werden beim Start eingespielt; eine nachträglich veränderte Migration wird über eine Prüfsumme erkannt. Zeitreihen (`node_metrics`, `target_metrics`) sind über `(Entität, ts)` indiziert, Ereignisse und Audit-Log über `ts`. Retention: Metriken und Ereignisse 30 bzw. 90 Tage, Nonces und abgelaufene Sitzungen werden stündlich entfernt.

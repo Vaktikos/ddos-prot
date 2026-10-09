@@ -37,9 +37,11 @@
 
 ## Bekannte Lücken (ehrlich benannt)
 
-- **MFA hat keine Recovery-Codes.** Einrichtung und Deaktivierung gehen über die Seite „Konto“. Bei Verlust des Geräts hilft nur ein Eingriff in der Datenbank (`UPDATE users SET totp_enabled=false, totp_secret_enc=NULL`).
-- **MFA-Schlüssel hängt am Signaturschlüssel.** Das Verschlüsselungs-Geheimnis wird aus dem Panel-Signaturschlüssel abgeleitet. Ein Verlust dieses Schlüssels macht alle gespeicherten MFA-Geheimnisse unlesbar.
-- **Signaturschlüssel des Panels** liegt als Datei (0600) auf dem Panel-Host. Ein HSM oder KMS ist vorgesehen, aber nicht umgesetzt. Ein Verlust des Schlüssels ist kritisch (siehe `OPERATIONS.md`, Backup).
-- **Rotation des Panel-Signaturschlüssels ist nicht umgesetzt.** Node-Schlüssel lassen sich rotieren, der Schlüssel, mit dem das Panel Policies signiert, nicht. Ein Wechsel erfordert derzeit ein Neu-Enrollment aller Agents.
+- **MFA-Recovery-Codes** werden einmalig angezeigt und nur als Hash gespeichert. Sind Gerät und Codes verloren, hilft nur ein Administratoreingriff (Konto zurücksetzen).
+- **MFA-Schlüssel** wird aus einer eigenen Datei (`PANEL_DATA_KEY_FILE`) abgeleitet, wenn gesetzt; ohne sie hängt er am Signaturschlüssel (nur bei Dateisigner). Mit externem Signierer ist `PANEL_DATA_KEY_FILE` Pflicht.
+- **Signaturschlüssel** kann Datei, externer Befehl (HSM/KMS-Wrapper) oder Vault Transit sein. Gegen einen echten HSM/KMS/Vault wurde nicht getestet. Beim Dateisigner liegt der Schlüssel (0600) auf dem Panel-Host.
+- **Rotation des Signaturschlüssels** ist umgesetzt (signierter Schlüsselsatz, Agents vertrauen alten und neuen Schlüssel während des Übergangs). Ein vollständig verlorener Schlüssel erfordert weiterhin Neu-Enrollment.
+- **XDP/Layer-7-Sperren** wirken auf Quelladressen; gefälschte Quelladressen (Spoofing) können dazu missbraucht werden, fremde Adressen zu sperren. Management-, Vertrauens-, Panel- und Schutzadressen sind ausgenommen; Sperren sind zeitlich begrenzt und durch `max_dynamic_entries` beschränkt.
+- **Guard- und Log-Daten** stammen von lokalen Prozessen; der Agent akzeptiert Guard-Statistik nur über Loopback.
 - **Kein Proxy-Vertrauen.** Das Panel nutzt nur die TCP-Gegenstelle als Client-IP. Hinter einem Reverse Proxy sind Rate-Limits daher pro Proxy-IP wirksam, nicht pro Client.
 - **Panel-Heartbeat ist nicht gegen Schlüsselklau durch lokale root-Angreifer geschützt.** Wer root auf dem Node hat, kann den Agent übernehmen und Sperren setzen. Das ist ein Grundproblem jedes Host-Agents; die Schadensbegrenzung liegt in den Management-Netzen und Limits, nicht in der Identität.

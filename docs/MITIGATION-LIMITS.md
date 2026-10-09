@@ -12,10 +12,11 @@ Ein Agent auf dem Zielserver kann nur Pakete verwerfen, die **bei ihm ankommen**
 | Verbindungserschöpfung | Host-Ebene: Auslastung der conntrack-Tabelle wird überwacht, ab 80 % meldet der Node `degraded`. Pro Ziel nur über SYN-Zählung und `conn_pps` sichtbar | conntrack-Limits oder Proxy/LB mit Verbindungslimits |
 | Fragmentierungsangriffe | Erkennung (`frag_pps`, Zähler für IPv4-Fragmente und IPv6-Fragment-Header); bei Vorfall optional Verwerfen (`drop_fragments`) | Upstream-Normalisierung bei hohem Volumen |
 | Ungültige TCP-Flags (Null, Xmas, SYN+FIN, SYN+RST, FIN ohne ACK) | Erkennung (`invalid_pps`); bei Vorfall optional Verwerfen (`drop_invalid`). Weitere Protokollanomalien sind nicht abgedeckt | Vorgelagerte Normalisierung |
+| Volumetrisch von wenigen Quellen | XDP-Sperre starker Quellen (`xdp_source_pps`), kernelseitiges Ablaufen. Bei gesättigter Leitung wirkungslos; verteilte Angriffe mit vielen schwachen Quellen werden nicht erfasst | Scrubbing |
 | Angriffe auf einzelne Ports | Zähler je Dienst (Pakete, SYN); Ratenlimit je Port | Port-Filter vor dem Server |
-| Layer 7 (HTTP-Floods, Request-Muster) | **Nicht implementiert.** Eine nginx-Vorlage mit Rate- und Verbindungslimits liegt in `deploy/l7/`; das Panel liest diese Logs nicht | Reverse Proxy oder WAF mit Rate-Limits |
+| Layer 7 (HTTP-Floods, Request-Muster) | Der Reverse Proxy (nginx-Vorlage `deploy/l7/`) lehnt ab; der Agent liest das Reject-Log, erkennt `http_flood` (`http_reject_rps`) und sperrt Quellen per XDP (`l7_source_rps`). **Keine eigene Request-Analyse**, keine Regeln im Proxy durch den Agent | Reverse Proxy/WAF mit Rate-Limits; hinter CDN `real_ip` setzen |
 | Verbindungsflut auf einen Minecraft-Port | Erkannt über neue Verbindungen je Dienstport (`conn_pps`, SYN-Zähler, ohne SYN-Verhältnis). Mitigation über das SYN-Ratenlimit, das alle TCP-Dienste des Ziels betrifft | Bei Volumen über der Leitung: Scrubbing |
-| Minecraft-Handshake, Status-Pings, Spielerzahl | **Nicht implementiert.** Erkennung läuft nur auf Zählerebene, ohne Protokollinspektion | Minecraft-aware Proxy mit Protokollprüfung |
+| Minecraft-Handshake, Status-Pings (Java) | `sentinel-mcguard` prüft Handshake, Status und Login, begrenzt Pings und sperrt Quellen; Agent erkennt `protocol_abuse` und spiegelt Sperren nach XDP. Der Guard ist ein Proxy: der Server sieht die Quelladresse nur mit PROXY-Protokoll. Bei Volumen über der Leitung wirkungslos. Keine Prüfung verschlüsselter Spielpakete | Scrubbing bei Volumen |
 | Minecraft-Bedrock (UDP) | Wie generisches UDP; keine Verbindungsrate, weil UDP keine Verbindungen kennt | Upstream-Filter |
 
 ## Ratenlimits und Sperren

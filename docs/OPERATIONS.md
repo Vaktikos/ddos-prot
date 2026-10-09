@@ -23,6 +23,8 @@ Das Panel legt beim ersten Start einen Ed25519-Signaturschlüssel in `/var/lib/s
 
 ## 2. Agent installieren
 
+**Einfachster Weg:** Im Panel Node anlegen; die Seite zeigt eine fertige Zeile `curl -fsSL https://PANEL/install.sh | sudo bash -s -- --token …`. Das Skript lädt den Agent vom Panel, prüft SHA-256, schreibt die Konfiguration, registriert den Node und startet den Dienst. Das Panel selbst richtet `scripts/install-panel.sh` ein (Compose, Secrets, Zertifikat). Weitere Optionen: `--help`. Der manuelle Weg unten bleibt möglich.
+
 Auf jedem Schutz-Node als root. Der Installer prüft Betriebssystem (Debian 11–13, Ubuntu 22.04/24.04), systemd, nftables und procfs. Er zeigt ein bestehendes Ruleset an und fragt nach, bevor er fortfährt. Er verändert nur die Tabelle `inet sentinel_shield`.
 
 ```bash
@@ -82,8 +84,24 @@ Wichtig: Ein **verlorener Signaturschlüssel** erfordert, alle Agents neu zu enr
 ## 5a. Schlüsselrotation und Konten
 
 - **Node-Schlüssel rotieren:** *Nodes → Node-Schlüssel rotieren* (Administrator). Der Agent tauscht den Schlüssel beim nächsten Heartbeat. Der alte Schlüssel ist danach ungültig.
-- **MFA:** Jeder Benutzer richtet TOTP unter *Konto* ein. Recovery-Codes gibt es nicht; siehe `SECURITY.md`.
+- **MFA:** Jeder Benutzer richtet TOTP unter *Konto* ein. Beim Einrichten werden Recovery-Codes angezeigt (einmalig; neue Codes unter *Konto*).
 - **Policy-Version nach einem Datenbank-Restore:** Ein Agent übernimmt nur Versionen, die höher sind als seine aktive. Wurde das Panel aus einem älteren Backup wiederhergestellt, kann die nächste Version niedriger sein. Dann auf dem Node `systemctl stop sentinel-agent`, `/var/lib/sentinel-shield/policy-cache.json` entfernen, Agent starten und im Panel eine neue Policy veröffentlichen.
+
+## 5b. Signaturschlüssel rotieren
+
+1. Neues Schlüsselpaar im Signierer anlegen (Datei: neue Schlüsseldatei; Vault: neue Key-Version; Befehl: neuer HSM-Schlüssel).
+2. Öffentlichen Schlüssel als `PANEL_NEXT_SIGNING_PUBLIC_KEY` setzen und das Panel neu starten. Das Panel veröffentlicht einen signierten Schlüsselsatz mit altem und neuem Schlüssel; Agents übernehmen ihn mit dem nächsten Heartbeat.
+3. Unter *Konto* in der Signatur-Ansicht prüfen, dass alle Nodes den neuen Schlüssel kennen (`knows_next_key`).
+4. Erst dann den Signierer auf den neuen Schlüssel umstellen (`PANEL_SIGNER_*`) und das Panel neu starten.
+5. Nach einem Policy-Zyklus den alten Schlüssel aus dem Satz entfernen.
+
+Nodes, die in Schritt 3 den neuen Schlüssel nicht melden, **nicht** abschalten: sie würden neue Policies ablehnen.
+
+## 5c. Optionale Bausteine
+
+- **XDP:** Installer `--xdp auto` (oder Interface). Entfernen: `sentinel-agent xdp-detach --config /etc/sentinel-shield/agent.json`. Der Filter bleibt über Agent-Neustarts gepinnt unter `/sys/fs/bpf`.
+- **Minecraft-Guard:** siehe `docs/MINECRAFT.md`; Anbindung mit `--mc-guard NAME,PORT,ZIEL`.
+- **Layer 7:** `deploy/l7/nginx-ratelimit.conf` in nginx einbinden, dann `--l7-log NAME,/var/log/nginx/ss_reject.log,ZIEL`; im Profil `http_reject_rps` und optional `l7_source_rps` + `l7_block_seconds` setzen. Das Log-Format muss `ss_reject` entsprechen (nicht lesbare Zeilen zeigt das Panel an).
 
 ## 6. Notfallverfahren
 

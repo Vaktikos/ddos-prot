@@ -149,6 +149,25 @@ paths:
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Envelope' } } } }
         '404': { $ref: '#/components/responses/Error' }
+  /api/v1/auth/mfa/recovery:
+    post: { summary: Create a new set of single-use MFA recovery codes (shown once)., responses: { '200': { description: OK } } }
+  /api/v1/signing:
+    get: { summary: Signing status - active/next key ids and which nodes trust them (admin)., responses: { '200': { description: OK } } }
+  /api/v1/nodes/{id}/rotate-key:
+    post:
+      summary: Ask the agent to rotate its node key at the next heartbeat (admin).
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses: { '200': { description: OK } }
+  /install.sh:
+    get: { security: [], summary: Agent installer script with this panel's address filled in., responses: { '200': { description: OK } } }
+  /download/{name}:
+    get:
+      security: []
+      summary: Agent binaries, SHA256SUMS and the systemd unit served from the panel's download directory.
+      parameters: [ { name: name, in: path, required: true, schema: { type: string } } ]
+      responses: { '200': { description: OK }, '404': { $ref: '#/components/responses/Error' } }
+  /agent/v1/rotate-key:
+    post: { security: [], summary: Agent proves ownership of the old key and registers the new one (signed)., responses: { '200': { description: OK } } }
 components:
   securitySchemes:
     sessionCookie: { type: apiKey, in: cookie, name: ss_session }
