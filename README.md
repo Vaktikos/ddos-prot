@@ -16,9 +16,10 @@ Eine DDoS-Schutzplattform für Hosting- und Datacenter-Betreiber: zentrales Webp
 - eBPF/XDP-Pfad (Mitigation erfolgt in nftables)
 - Layer-7-Schutz (HTTP-Floods, Request-Muster): benötigt Reverse Proxy oder WAF
 - Protokollspezifische Minecraft-Erkennung (Handshake, Status-Pings). Verbindungsfluten auf einen Minecraft-Port werden erkannt (`conn_pps`, Beispiel in `deploy/profiles/`)
-- Erkennung von Fragmentierung, Protokollanomalien und Verbindungserschöpfung
-- MFA-Einrichtung in der Oberfläche (API und Login sind vorhanden)
-- Schlüsselrotation für Nodes, HSM/KMS für den Signaturschlüssel
+- Weitere Protokollanomalien über ungültige TCP-Flags und Fragmente hinaus
+- Recovery-Codes für MFA
+- Rotation des Panel-Signaturschlüssels, HSM/KMS
+- Panel-Integration eines Reverse Proxys (nur eine nginx-Vorlage in `deploy/l7/`)
 - Produktionsmessungen (Fehlalarmrate, Last des Panels); siehe Testbericht
 
 ## Architektur in Kürze

@@ -1,10 +1,10 @@
-# Common development tasks. Requires Go 1.24+, Node 22+ and, for integration tests, PostgreSQL 16.
+# Common development tasks. Requires Go 1.27+, Node 22+ and, for integration tests, PostgreSQL 16.
 GO        ?= go
 VERSION   ?= 0.1.0
 BIN       := bin
 SS_TEST_DSN ?=
 
-.PHONY: all build test test-integration test-nft web web-build clean vet
+.PHONY: all build test test-integration test-nft web web-build clean vet vuln
 
 all: build test web-build
 
@@ -26,7 +26,7 @@ test: vet
 # WARNING: the test recreates the public schema of that database.
 test-integration:
 	@test -n "$(SS_TEST_DSN)" || (echo "SS_TEST_DSN ist nicht gesetzt" && exit 1)
-	SS_TEST_DSN="$(SS_TEST_DSN)" $(GO) test -count=1 -race ./internal/store/ ./internal/panel/
+	SS_TEST_DSN="$(SS_TEST_DSN)" $(GO) test -count=1 -race -p 1 ./internal/store/ ./internal/panel/
 
 # Loads a test table into the live kernel. Run only on a disposable host, as root.
 test-nft:
@@ -40,3 +40,9 @@ web-build:
 
 clean:
 	rm -rf $(BIN) web/dist
+
+# Needs network access to vuln.go.dev. Also run in CI.
+vuln:
+	$(GO) install golang.org/x/vuln/cmd/govulncheck@latest
+	govulncheck ./...
+	cd web && npm audit --audit-level=moderate

@@ -131,6 +131,29 @@ func (m MemInfo) MemUsedPercent() float64 {
 	return 100 * float64(m.Total-m.Available) / float64(m.Total)
 }
 
+// ReadUint parses a procfs file holding one unsigned integer.
+func ReadUint(r io.Reader) (uint64, error) {
+	b, err := io.ReadAll(io.LimitReader(r, 64))
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+}
+
+// Conntrack sysctl files. They exist only while the nf_conntrack module is loaded.
+const (
+	ProcConntrackCount = "/proc/sys/net/netfilter/nf_conntrack_count"
+	ProcConntrackMax   = "/proc/sys/net/netfilter/nf_conntrack_max"
+)
+
+// ConntrackPercent returns how full the connection tracking table is.
+func ConntrackPercent(count, max uint64) float64 {
+	if max == 0 {
+		return 0
+	}
+	return 100 * float64(count) / float64(max)
+}
+
 // Files for live reads; tests inject other readers.
 const (
 	ProcNetDev = "/proc/net/dev"

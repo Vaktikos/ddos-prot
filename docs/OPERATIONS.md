@@ -79,6 +79,12 @@ Wiederherstellung: Stack stoppen, `pg_restore --clean -d …` in eine leere Date
 
 Wichtig: Ein **verlorener Signaturschlüssel** erfordert, alle Agents neu zu enrollen. Ein **Backup, das älter ist als die letzte Policy**, führt dazu, dass Agents eine neuere Version sehen, die das Panel nicht mehr kennt; in dem Fall die Policy neu veröffentlichen.
 
+## 5a. Schlüsselrotation und Konten
+
+- **Node-Schlüssel rotieren:** *Nodes → Node-Schlüssel rotieren* (Administrator). Der Agent tauscht den Schlüssel beim nächsten Heartbeat. Der alte Schlüssel ist danach ungültig.
+- **MFA:** Jeder Benutzer richtet TOTP unter *Konto* ein. Recovery-Codes gibt es nicht; siehe `SECURITY.md`.
+- **Policy-Version nach einem Datenbank-Restore:** Ein Agent übernimmt nur Versionen, die höher sind als seine aktive. Wurde das Panel aus einem älteren Backup wiederhergestellt, kann die nächste Version niedriger sein. Dann auf dem Node `systemctl stop sentinel-agent`, `/var/lib/sentinel-shield/policy-cache.json` entfernen, Agent starten und im Panel eine neue Policy veröffentlichen.
+
 ## 6. Notfallverfahren
 
 | Lage | Maßnahme |

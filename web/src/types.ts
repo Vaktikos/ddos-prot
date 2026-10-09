@@ -69,9 +69,18 @@ export interface Profile {
     syn_pps: number;
     udp_pps: number;
     icmp_pps: number;
+    conn_pps: number;
+    frag_pps: number;
+    invalid_pps: number;
     confirm_seconds: number;
     clear_seconds: number;
-    mitigation: { syn_rate_per_source: number; udp_rate_per_source: number; auto_block_seconds: number };
+    mitigation: {
+      syn_rate_per_source: number;
+      udp_rate_per_source: number;
+      auto_block_seconds: number;
+      drop_fragments: boolean;
+      drop_invalid: boolean;
+    };
   };
 }
 

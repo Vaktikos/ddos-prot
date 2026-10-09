@@ -113,6 +113,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/v1/nodes/{id}", a.withSession(RoleAdmin, a.updateNode))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/revoke", a.withSession(RoleAdmin, a.revokeNode))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/enrollment-token", a.withSession(RoleAdmin, a.newEnrollmentToken))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/rotate-key", a.withSession(RoleAdmin, a.requestKeyRotation))
 	mux.HandleFunc("POST /api/v1/profiles", a.withSession(RoleAdmin, a.createProfile))
 	mux.HandleFunc("POST /api/v1/locations", a.withSession(RoleAdmin, a.createLocation))
 	mux.HandleFunc("POST /api/v1/users", a.withSession(RoleAdmin, a.createUser))
@@ -122,6 +123,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /agent/v1/enroll", a.enroll)
 	mux.HandleFunc("POST /agent/v1/heartbeat", a.heartbeat)
 	mux.HandleFunc("GET /agent/v1/policy", a.agentPolicy)
+	mux.HandleFunc("POST /agent/v1/rotate-key", a.agentRotateKey)
 
 	mux.HandleFunc("GET /healthz", a.healthz)
 	mux.HandleFunc("GET /readyz", a.readyz)

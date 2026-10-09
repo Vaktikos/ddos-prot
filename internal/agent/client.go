@@ -18,6 +18,14 @@ import (
 	"github.com/vaktikos/ddos-prot/internal/policy"
 )
 
+// HTTPError is returned for any non-200 panel answer, so callers can react to the status.
+type HTTPError struct {
+	Status int
+	Body   string
+}
+
+func (e *HTTPError) Error() string { return fmt.Sprintf("panel antwortet %d: %s", e.Status, e.Body) }
+
 // PanelClient talks to the panel. Requests after enrollment are signed with the
 // node's Ed25519 key, and responses are only trusted through signed envelopes.
 type PanelClient struct {
@@ -77,6 +85,11 @@ func (c *PanelClient) FetchPolicy(ctx context.Context, nodeID string, priv ed255
 	return env, err
 }
 
+// RotateKey tells the panel to replace the node's public key. The request is signed with the old key.
+func (c *PanelClient) RotateKey(ctx context.Context, nodeID string, priv ed25519.PrivateKey, newPub ed25519.PublicKey) error {
+	return c.signedJSON(ctx, nodeID, priv, http.MethodPost, "/agent/v1/rotate-key", map[string]string{"public_key": encodeB64(newPub)}, nil)
+}
+
 func (c *PanelClient) signedJSON(ctx context.Context, nodeID string, priv ed25519.PrivateKey, method, path string, in, out any) error {
 	var body []byte
 	if in != nil {
@@ -125,7 +138,7 @@ func (c *PanelClient) doJSON(ctx context.Context, method, path string, in any, o
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("panel antwortet %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return &HTTPError{Status: resp.StatusCode, Body: strings.TrimSpace(string(data))}
 	}
 	if out != nil {
 		if err := json.Unmarshal(data, out); err != nil {

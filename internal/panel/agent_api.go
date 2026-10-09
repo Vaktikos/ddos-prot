@@ -150,6 +150,7 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 		status = "degraded"
 	}
 	var desired int64
+	var rotate bool
 	err = tx.QueryRow(ctx, `UPDATE nodes SET
 		status = $2, hostname = left($3, 255), agent_version = left($4, 64), health = $5::jsonb,
 		applied_policy_version = $6, last_heartbeat_at = $7, updated_at = $7,
@@ -157,8 +158,8 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 		                   WHEN $8 <> '' THEN 'failed' ELSE 'pending' END,
 		sync_error = CASE WHEN $6 >= desired_policy_version THEN '' ELSE left($8, 500) END
 		WHERE id = $1::uuid
-		RETURNING desired_policy_version`,
-		nodeID, status, hb.Hostname, hb.AgentVersion, string(healthJSON), hb.AppliedPolicyVersion, now, hb.PolicyError).Scan(&desired)
+		RETURNING desired_policy_version, rotate_key_requested`,
+		nodeID, status, hb.Hostname, hb.AgentVersion, string(healthJSON), hb.AppliedPolicyVersion, now, hb.PolicyError).Scan(&desired, &rotate)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "interner Fehler")
 		return
@@ -218,6 +219,7 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "interner Fehler")
 		return
 	}
+	reply.RotateKey = rotate
 	if err := tx.Commit(ctx); err != nil {
 		writeErr(w, http.StatusInternalServerError, "interner Fehler")
 		return
@@ -264,10 +266,13 @@ func (a *App) applyEvent(ctx context.Context, tx pgx.Tx, nodeID string, ev agent
 			Note       string  `json:"note"`
 		}
 		_ = json.Unmarshal(payload, &p)
-		_, err := tx.Exec(ctx, `INSERT INTO alerts (node_id, severity, source, title, message)
-			VALUES ($1::uuid, 'critical', 'detection', $2, $3)`, nodeID,
+		// One alert per incident: the confirmation alert uses the same key and wins if it came first.
+		_, err := tx.Exec(ctx, `INSERT INTO alerts (node_id, severity, source, title, message, dedupe_key)
+			VALUES ($1::uuid, 'critical', 'detection', $2, $3, $4)
+			ON CONFLICT (dedupe_key) WHERE acknowledged_at IS NULL AND dedupe_key IS NOT NULL DO NOTHING`, nodeID,
 			fmt.Sprintf("Eskalation: %s auf %s", p.Category, p.Target),
-			fmt.Sprintf("Vorfall %s, Spitze %.0f pps. %s", p.IncidentID, p.PeakPPS, p.Note))
+			fmt.Sprintf("Vorfall %s, Spitze %.0f pps. %s", p.IncidentID, p.PeakPPS, p.Note),
+			"incident:"+nodeID+":"+p.IncidentID)
 		return err
 	case "policy":
 		return a.applyPolicyEvent(ctx, tx, nodeID, ev.Action, payload)
@@ -308,10 +313,12 @@ func (a *App) applyIncident(ctx context.Context, tx pgx.Tx, nodeID, action strin
 		return err
 	}
 	if ev.Verdict == detect.VerdictConfirmed && action != "closed" {
-		_, err := tx.Exec(ctx, `INSERT INTO alerts (node_id, severity, source, title, message)
-			VALUES ($1::uuid, 'critical', 'detection', $2, $3)`, nodeID,
+		_, err := tx.Exec(ctx, `INSERT INTO alerts (node_id, severity, source, title, message, dedupe_key)
+			VALUES ($1::uuid, 'critical', 'detection', $2, $3, $4)
+			ON CONFLICT (dedupe_key) WHERE acknowledged_at IS NULL AND dedupe_key IS NOT NULL DO NOTHING`, nodeID,
 			fmt.Sprintf("Bestätigter Angriff: %s auf %s", ev.Category, ev.Target),
-			fmt.Sprintf("Vorfall %s, Spitze %.0f pps, Konfidenz %.2f", ev.ID, ev.PeakPPS, ev.Confidence))
+			fmt.Sprintf("Vorfall %s, Spitze %.0f pps, Konfidenz %.2f", ev.ID, ev.PeakPPS, ev.Confidence),
+			"incident:"+nodeID+":"+ev.ID)
 		return err
 	}
 	return nil

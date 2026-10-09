@@ -144,6 +144,12 @@ function NodeDetail({ user, nodeId, onBack }: { user: User; nodeId: string; onBa
           ))}
         </div>
         <div className="mt-3 text-xs text-slate-500">Management-Netze (nie sperrbar): {node.management_cidrs.join(", ")}</div>
+        {user.role === "admin" && node.status !== "revoked" && node.enrolled && (
+          <div className="mt-3 flex items-center gap-3 text-xs text-slate-500">
+            <Button onClick={() => run(() => api("POST", `/api/v1/nodes/${nodeId}/rotate-key`), "Schlüsselrotation angefordert, der Agent tauscht beim nächsten Heartbeat")}>Node-Schlüssel rotieren</Button>
+            <span>Der Agent erzeugt einen neuen Schlüssel und weist den Besitz des alten nach.</span>
+          </div>
+        )}
       </Card>
 
       <Card title="Geschützte Ziele">

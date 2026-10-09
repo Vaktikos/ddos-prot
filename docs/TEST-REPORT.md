@@ -1,21 +1,23 @@
 # Testbericht Phase 1
 
-Stand: 2026-10-09. Umgebung: Ubuntu 24.04.5 in einer VM (Kernel 6.18), Go 1.24.7, nftables 1.0.9, PostgreSQL 16.15, Node 22.22. Alle Angriffsmessungen liefen **ausschließlich auf dem Loopback-Interface** gegen eine Testadresse (`192.0.2.10`), die nur auf diesem Host existiert. Es wurden keine fremden Ziele belastet.
+Stand: 2026-10-09. Umgebung: Ubuntu 24.04.5 in einer VM (Kernel 6.18), Go 1.27.2, nftables 1.0.9, PostgreSQL 16.15, Node 22.22. Die Messungen in Abschnitt 2 stammen aus der Version mit Go 1.24.7; die Logik des Agents wurde danach um neue Erkennungsklassen ergänzt, die Messwerte wurden nicht wiederholt. Alle Angriffsmessungen liefen **ausschließlich auf dem Loopback-Interface** gegen eine Testadresse (`192.0.2.10`), die nur auf diesem Host existiert. Es wurden keine fremden Ziele belastet.
 
 ## 1. Automatisierte Tests
 
 | Paket | Tests | Inhalt | Ergebnis |
 |---|---|---|---|
 | `internal/netaddr` | 3 | Adressnormalisierung, Mindest-Präfixlängen, Familienüberlappung | bestanden |
-| `internal/policy` | 4 | Validierung (12 Ablehnungsfälle inkl. Management- und Trusted-Konflikt), Signatur, Manipulation | bestanden |
-| `internal/detect` | 12 | synthetische Messreihen: Ruhe, SYN-Flood, Kurzimpuls, adaptive Anomalie, Verkehrsspitze, Warm-up, IPv6-ICMP, Ziel-Unabhängigkeit, Eingabevalidierung, Ausschluss von Zustandsexplosion | bestanden |
-| `internal/mitigate` | 7 | Stufen, Modi (dry_run/approval/auto), volle Sperrliste, Freigabe-Timeout, Entfernen je Vorfall | bestanden |
+| `internal/policy` | 5 | Validierung (12 Ablehnungsfälle inkl. Management- und Trusted-Konflikt), Signatur, Manipulation | bestanden |
+| `internal/detect` | 13 | synthetische Messreihen: Ruhe, SYN-Flood, Kurzimpuls, adaptive Anomalie, Verkehrsspitze, Warm-up, IPv6-ICMP, Ziel-Unabhängigkeit, Eingabevalidierung, Ausschluss von Zustandsexplosion | bestanden |
+| `internal/mitigate` | 8 | Stufen, Modi (dry_run/approval/auto), volle Sperrliste, Freigabe-Timeout, Entfernen je Vorfall | bestanden |
 | `internal/nft` | 10 | deterministisches Rendering, Accept vor Drop, abgelaufene Sperren entfallen, Ablehnung manipulierter Namen, Kernel-Parser (`nft -c`), Zählerparser, Integration mit Rollback | bestanden |
-| `internal/metrics` | 5 | /proc-Parser, CPU-Berechnung, Live-Lesen | bestanden |
+| `internal/metrics` | 6 | /proc-Parser, CPU-Berechnung, Live-Lesen | bestanden |
 | `internal/identity` | 6 | Signatur, falscher Schlüssel, Zeitfenster, fehlende Header, Replay-Speicher, Schlüsselrechte | bestanden |
-| `internal/agent` | 10 | Dry-Run, Auto-Modus mit Entfernung nach Vorfall, Freigabe, **Panel-Ausfall mit Cache-Start**, **manipulierte Policy**, Kernel-Fehler, Outbox-Limit, HTTPS-Pflicht, Management-Pflicht | bestanden |
-| `internal/store` | 1 | Migrationen auf echtem PostgreSQL (inkl. 0002), idempotenter zweiter Lauf | bestanden (mit `SS_TEST_DSN`) |
-| `internal/panel` | 5 | TOTP-Testvektoren (RFC 6238), Replay-Schutz, Verschlüsselung des Geheimnisses, MFA-Login gegen PostgreSQL | **End-to-End** gegen PostgreSQL: Enrollment, Einmal-Token, signierte Heartbeats, Replay, Manipulation, Angriff und Schutz, Freigabe-Workflow, Sperren, Management-Schutz, Rollback, RBAC, CSRF, Origin, Login-Fehler, Dashboard, Audit, Widerruf. **Gleichzeitige Änderungen:** 12 parallele Schreibvorgänge am selben Node, lückenlose Versionen | bestanden (mit `SS_TEST_DSN`) |
+| `internal/agent` | 14 | Dry-Run, Auto-Modus mit Entfernung nach Vorfall, Freigabe, **Panel-Ausfall mit Cache-Start**, **manipulierte Policy**, Kernel-Fehler, Outbox-Limit, HTTPS-Pflicht, Management-Pflicht | bestanden |
+| `internal/store` | 2 | Migrationen auf echtem PostgreSQL (inkl. 0002), idempotenter zweiter Lauf | bestanden (mit `SS_TEST_DSN`) |
+| `internal/panel` | 10 | End-to-End-Lauf, gleichzeitige Änderungen, TOTP-Testvektoren, MFA-Login, Konto-Sperre, Login-Ratenlimit, Schlüsselrotation samt Absturzfall (alle gegen PostgreSQL) | **End-to-End** gegen PostgreSQL: Enrollment, Einmal-Token, signierte Heartbeats, Replay, Manipulation, Angriff und Schutz, Freigabe-Workflow, Sperren, Management-Schutz, Rollback, RBAC, CSRF, Origin, Login-Fehler, Dashboard, Audit, Widerruf. **Gleichzeitige Änderungen:** 12 parallele Schreibvorgänge am selben Node, lückenlose Versionen | bestanden (mit `SS_TEST_DSN`) |
+
+Gesamt: 77 bestandene Testläufe einschließlich Unterfälle, mit `-race`, PostgreSQL und Kernel-Integration. Die Integrationstests des Panels müssen mit `-p 1` laufen, weil sie dieselbe Testdatenbank zurücksetzen.
 
 Der Lauf mit `-race` war sauber. Die Gleichzeitigkeitsprüfung hat einen **echten Deadlock** zwischen parallelen Policy-Änderungen aufgedeckt (PostgreSQL `40P01`). Behoben durch Sperren des Node-Datensatzes als erste Schreiboperation jeder Transaktion. Der Test läuft seitdem dreimal hintereinander fehlerfrei und ohne fehlgeschlagene Anfragen.
 
@@ -70,7 +72,19 @@ Die Ziele stehen hier, damit sie überprüfbar bleiben. Der Status zeigt, was ge
 - **Lange Laufzeit** (Tage) und **Retention-Jobs** sind nicht gemessen; die Jobs laufen stündlich, ihre Ausführung ist nicht beobachtet.
 - **Angriffe mit realem Volumen** und Netzwerkangriffe über echte Leitungen wurden nicht gemessen. Die Messungen sind Laborwerte.
 
-## 5. Reproduktion
+## 5a. Ergänzungen nach der ersten Fassung
+
+- **Neue Zähler am echten Kernel geprüft:** Mit Raw-Sockets auf dem Loopback-Alias gesendet: 20 Fragmente (MF-Flag und Offset) werden gezählt, ein normales UDP-Paket nicht; 30 Pakete mit ungültigen Flags (Null, SYN+FIN, Xmas) werden gezählt. Dabei fiel auf, dass der SYN-Zähler auch SYN+FIN erfasste; die Regel prüft jetzt exakte SYN-Pakete.
+- **Gefundene und behobene Fehler:** abgelehnte Policy im Cache; fehlende Versionsprüfung beim Agent; verwaiste Vorfälle nach Entfernen eines Ziels; zu breite `trusted`- und Management-Netze; Login-Timing bei gesperrten Konten; doppelte Alarme je Vorfall; blockierende Migrationssperre bei kleinem Verbindungspool; Datenbank-Kollision zwischen parallelen Testpaketen; Dashboard-Absturz bei leerer Liste; Zähler-Unterlauf beim Host.
+- **Weitere Tests:** Konto-Sperre, Login-Ratenlimit, MFA, Schlüsselrotation samt Absturzfall, parallele Migrationen, Fragment-/Flag-Erkennung, conntrack-Warnung. UI-Ablauf (Profil anlegen, MFA einrichten, mit Code anmelden) im echten Chromium durchgespielt.
+
+## 6. Abhängigkeiten und Schwachstellen
+
+- Aktualisiert auf Go 1.27.2 (Go 1.24 ist nicht mehr unterstützt), `pgx` 5.11.0 (enthält die Korrektur für GO-2026-5004), `x/crypto` 0.58, `x/text` 0.43, `x/sys` 0.49, `x/sync` 0.24. Frontend: React 19, Vite 8, Tailwind 4, TypeScript 7.
+- `npm audit`: **0 Funde** (vorher 10, davon 7 hoch, alle in Build-Werkzeugen).
+- **`govulncheck` konnte in dieser Umgebung nicht laufen:** `vuln.go.dev` wird vom Egress-Proxy blockiert. Die Aussage „0 Funde“ für Go-Code ist damit **nicht belegt**. Die CI führt `govulncheck ./...` aus und zeigt das Ergebnis; bis dahin gilt nur, dass die gepatchten Versionen eingesetzt sind. Der Fund GO-2026-5004 betraf den einfachen Protokollmodus von pgx; dieses Projekt nutzt den Standardmodus.
+
+## 7. Reproduktion
 
 ```bash
 make test                                              # Unit-Tests mit Race-Detector

@@ -12,13 +12,16 @@
 | Kontrolle | Umsetzung | Nachweis |
 |---|---|---|
 | Passwortspeicherung | Argon2id (64 MiB, t=3, p=2), Salt pro Hash, konstante Zeitvergleiche, Dummy-Hash bei unbekanntem Benutzer | `TestEndToEnd` (Fehlversuch), `auth.go` |
-| Kontosperre | 5 Fehlversuche → 15 min gesperrt; Anmeldung pro IP 10/min | Code-Pfad in `login`; Rate-Limit-Test fehlt (siehe Lücken) |
+| Kontosperre | 5 Fehlversuche → 15 min gesperrt; Anmeldung pro IP 10/min | `TestLoginAccountLockout`, `TestLoginIsRateLimitedPerClient` |
 | MFA (TOTP, RFC 6238) | Optional pro Konto; Geheimnis AES-GCM-verschlüsselt; Codes nur einmal gültig (`totp_last_step`); falscher Code zählt als Fehlversuch | `TestTOTPRFC6238Vector`, `TestTOTPRejectsReplayAndOutOfWindow`, `TestMFALoginFlow` |
 | Sitzungen | Zufällige 256-Bit-Token, nur SHA-256 gespeichert, 12 h absolut, 30 min Leerlauf | `TestEndToEnd` (Login, Logout-Pfad, Berechtigungen) |
 | Rollen | viewer < operator < admin, Prüfung in jedem Handler über `withSession` | `TestEndToEnd` (viewer darf nicht schreiben, kein Audit-Zugriff) |
 | CSRF | Header `X-CSRF-Token` konstant-zeitig verglichen, Origin muss exakt passen | `TestEndToEnd` (fehlendes Token, fremder Origin) |
 | Enrollment | Einmal-Token, 256 Bit, nur Hash gespeichert, 24 h gültig, atomar verbraucht | `TestEndToEnd` (zweite Verwendung scheitert) |
 | Agent-Identität | Ed25519 pro Node, Schlüsseldatei 0600, Start verweigert bei offenen Rechten | `identity_test.go` |
+| Schlüsselrotation | Admin fordert an; der Agent erzeugt einen neuen Schlüssel, legt ihn als `identity.key.next` ab, meldet ihn mit Signatur des alten Schlüssels und tauscht erst danach; ein Absturz dazwischen wird beim Neustart über das 401 erkannt | `TestKeyRotation`, `TestKeyRotationCrashRecovery` |
+| Versionsschutz | Der Agent übernimmt nur Policies mit höherer Version als der aktiven; ein erneut eingespielter alter, gültig signierter Envelope wird abgelehnt | `TestOlderSignedPolicyIsRejected` |
+| Abhängigkeiten | Go 1.27.2, pgx 5.11 (behebt GO-2026-5004), aktuelle `x/*`-Module; `npm audit` meldet 0 Funde; CI führt `govulncheck` und `npm audit` aus, Dependabot hält die Versionen aktuell | siehe `TEST-REPORT.md`, Abschnitt 6 |
 | Replay-Schutz | Nonce pro Node in PostgreSQL (Primärschlüssel), Zeitfenster ±60 s | `TestEndToEnd` (zweiter identischer Request → 401) |
 | Manipulation | Body-Hash in der Signatur; veränderter Body → 401 | `TestEndToEnd`, `identity_test.go` |
 | Policy-Integrität | Signatur, SHA-256 und Version werden vor jeder Übernahme geprüft; unbekannte Felder werden abgelehnt | `policy_test.go`, `TestTamperedPolicyIsRejectedAndPreviousKept` |
@@ -34,10 +37,9 @@
 
 ## Bekannte Lücken (ehrlich benannt)
 
-- **MFA ist nur per API einzurichten.** Der UI-Teil für Einrichtung und Deaktivierung fehlt; das Login-Formular fragt den Code ab. Einrichtung: `POST /api/v1/auth/mfa/enroll`, dann `POST /api/v1/auth/mfa/enable` mit einem Code. Recovery-Codes gibt es nicht: Bei Verlust hilft nur ein Administrator-Eingriff in der Datenbank (`UPDATE users SET totp_enabled=false`).
+- **MFA hat keine Recovery-Codes.** Einrichtung und Deaktivierung gehen über die Seite „Konto“. Bei Verlust des Geräts hilft nur ein Eingriff in der Datenbank (`UPDATE users SET totp_enabled=false, totp_secret_enc=NULL`).
 - **MFA-Schlüssel hängt am Signaturschlüssel.** Das Verschlüsselungs-Geheimnis wird aus dem Panel-Signaturschlüssel abgeleitet. Ein Verlust dieses Schlüssels macht alle gespeicherten MFA-Geheimnisse unlesbar.
-- **Kein Rate-Limit-Test** für die Anmeldung. Der Limiter existiert, ist aber nur über den Code geprüft.
 - **Signaturschlüssel des Panels** liegt als Datei (0600) auf dem Panel-Host. Ein HSM oder KMS ist vorgesehen, aber nicht umgesetzt. Ein Verlust des Schlüssels ist kritisch (siehe `OPERATIONS.md`, Backup).
-- **Kein Schlüsselwechsel für Nodes.** Ein kompromittierter Agent wird durch Widerruf gesperrt, nicht durch Rotation des Schlüssels. Neu-Enrollment erfordert einen neuen Node.
+- **Rotation des Panel-Signaturschlüssels ist nicht umgesetzt.** Node-Schlüssel lassen sich rotieren, der Schlüssel, mit dem das Panel Policies signiert, nicht. Ein Wechsel erfordert derzeit ein Neu-Enrollment aller Agents.
 - **Kein Proxy-Vertrauen.** Das Panel nutzt nur die TCP-Gegenstelle als Client-IP. Hinter einem Reverse Proxy sind Rate-Limits daher pro Proxy-IP wirksam, nicht pro Client.
 - **Panel-Heartbeat ist nicht gegen Schlüsselklau durch lokale root-Angreifer geschützt.** Wer root auf dem Node hat, kann den Agent übernehmen und Sperren setzen. Das ist ein Grundproblem jedes Host-Agents; die Schadensbegrenzung liegt in den Management-Netzen und Limits, nicht in der Identität.

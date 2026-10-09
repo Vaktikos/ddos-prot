@@ -81,3 +81,19 @@ func TestLiveProcfs(t *testing.T) {
 		t.Fatalf("/proc/meminfo: %v", err)
 	}
 }
+
+func TestConntrackParsing(t *testing.T) {
+	n, err := ReadUint(strings.NewReader("12345\n"))
+	if err != nil || n != 12345 {
+		t.Fatalf("ReadUint = %d, %v", n, err)
+	}
+	if _, err := ReadUint(strings.NewReader("abc")); err == nil {
+		t.Fatal("ungültiger Wert muss Fehler liefern")
+	}
+	if got := ConntrackPercent(850, 1000); got != 85 {
+		t.Fatalf("ConntrackPercent = %v", got)
+	}
+	if ConntrackPercent(5, 0) != 0 {
+		t.Fatal("ohne Maximum keine Aussage")
+	}
+}

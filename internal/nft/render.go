@@ -59,20 +59,25 @@ func Render(p *policy.Policy, mgmt []netip.Prefix, now time.Time, table string, 
 		d := daddr(pre)
 		base := fmt.Sprintf("t%d", i)
 		counters = append(counters, counterDecl(base+"_all"), counterDecl(base+"_syn"),
-			counterDecl(base+"_udp"), counterDecl(base+"_icmp"), counterDecl(base+"_rl"))
+			counterDecl(base+"_udp"), counterDecl(base+"_icmp"), counterDecl(base+"_rl"),
+			counterDecl(base+"_frag"), counterDecl(base+"_inv"))
 		count = append(count,
 			fmt.Sprintf(`%s counter name "%s_all"`, d, base),
-			fmt.Sprintf(`%s tcp flags & (syn | ack) == syn counter name "%s_syn"`, d, base),
+			fmt.Sprintf(`%s tcp flags & (fin | syn | rst | ack) == syn counter name "%s_syn"`, d, base),
 			fmt.Sprintf(`%s meta l4proto udp counter name "%s_udp"`, d, base),
 			fmt.Sprintf(`%s meta l4proto { icmp, icmpv6 } counter name "%s_icmp"`, d, base),
+			fmt.Sprintf(`%s %s counter name "%s_frag"`, d, fragMatch(pre), base),
 		)
+		for _, m := range invalidFlagMatches {
+			count = append(count, fmt.Sprintf(`%s %s counter name "%s_inv"`, d, m, base))
+		}
 		for j, s := range t.Services {
 			sc := fmt.Sprintf("%s_s%d", base, j)
 			counters = append(counters, counterDecl(sc+"_pkts"))
 			count = append(count, fmt.Sprintf(`%s %s dport %d counter name "%s_pkts"`, d, s.Protocol, s.Port, sc))
 			if s.Protocol == policy.ProtoTCP {
 				counters = append(counters, counterDecl(sc+"_syn"))
-				count = append(count, fmt.Sprintf(`%s tcp dport %d tcp flags & (syn | ack) == syn counter name "%s_syn"`, d, s.Port, sc))
+				count = append(count, fmt.Sprintf(`%s tcp dport %d tcp flags & (fin | syn | rst | ack) == syn counter name "%s_syn"`, d, s.Port, sc))
 			}
 		}
 	}
@@ -114,11 +119,17 @@ func Render(p *policy.Policy, mgmt []netip.Prefix, now time.Time, table string, 
 		case KindSYNRate:
 			ports := tcpPorts(t)
 			if len(ports) == 0 {
-				guard = append(guard, rateRule(a.Target, base+"_tcp", "tcp flags & (syn | ack) == syn", a.Rate, a.AutoBlockSeconds, base, c))
+				guard = append(guard, rateRule(a.Target, base+"_tcp", "tcp flags & (fin | syn | rst | ack) == syn", a.Rate, a.AutoBlockSeconds, base, c))
 			}
 			for _, port := range ports {
 				guard = append(guard, rateRule(a.Target, fmt.Sprintf("%s_tcp%d", base, port),
-					fmt.Sprintf("tcp dport %d tcp flags & (syn | ack) == syn", port), a.Rate, a.AutoBlockSeconds, base, c))
+					fmt.Sprintf("tcp dport %d tcp flags & (fin | syn | rst | ack) == syn", port), a.Rate, a.AutoBlockSeconds, base, c))
+			}
+		case KindDropFrag:
+			guard = append(guard, fmt.Sprintf(`%s %s counter name "%s_rl" drop %s`, daddr(a.Target), fragMatch(a.Target), base, c))
+		case KindDropInvalid:
+			for _, m := range invalidFlagMatches {
+				guard = append(guard, fmt.Sprintf(`%s %s counter name "%s_rl" drop %s`, daddr(a.Target), m, base, c))
 			}
 		case KindUDPRate:
 			ports := udpPorts(t)
@@ -165,7 +176,29 @@ func Render(p *policy.Policy, mgmt []netip.Prefix, now time.Time, table string, 
 const (
 	KindSYNRate = "syn_rate_limit"
 	KindUDPRate = "udp_rate_limit"
+	// KindDropFrag drops IP fragments toward a target; KindDropInvalid drops TCP packets
+	// with impossible flag combinations. Neither needs a rate.
+	KindDropFrag    = "drop_fragments"
+	KindDropInvalid = "drop_invalid_flags"
 )
+
+// invalidFlagMatches are TCP flag combinations that no correct stack sends: null scan,
+// SYN+FIN, SYN+RST, xmas and FIN without ACK.
+var invalidFlagMatches = []string{
+	"tcp flags & (fin | syn | rst | psh | ack | urg) == 0",
+	"tcp flags & (fin | syn) == fin | syn",
+	"tcp flags & (syn | rst) == syn | rst",
+	"tcp flags & (fin | psh | urg) == fin | psh | urg",
+	"tcp flags & (fin | ack) == fin",
+}
+
+// fragMatch matches any IP fragment (IPv4: more-fragments flag or offset; IPv6: fragment header).
+func fragMatch(p netip.Prefix) string {
+	if p.Addr().Is4() {
+		return "ip frag-off & 0x3fff != 0"
+	}
+	return "exthdr frag exists"
+}
 
 // Active is one mitigation that the ruleset must currently contain.
 type Active struct {
@@ -178,11 +211,14 @@ type Active struct {
 }
 
 func (a Active) validate() error {
-	if a.Kind != KindSYNRate && a.Kind != KindUDPRate {
+	switch a.Kind {
+	case KindSYNRate, KindUDPRate:
+		if a.Rate < 1 || a.Rate > 1000000 {
+			return fmt.Errorf("Maßnahme %s: Rate außerhalb 1..1000000", a.ID)
+		}
+	case KindDropFrag, KindDropInvalid:
+	default:
 		return fmt.Errorf("unbekannte Maßnahme %q", a.Kind)
-	}
-	if a.Rate < 1 || a.Rate > 1000000 {
-		return fmt.Errorf("Maßnahme %s: Rate außerhalb 1..1000000", a.ID)
 	}
 	if a.AutoBlockSeconds < 0 || a.AutoBlockSeconds > 86400 {
 		return fmt.Errorf("Maßnahme %s: Sperrdauer außerhalb 0..86400", a.ID)

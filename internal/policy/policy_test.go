@@ -108,3 +108,13 @@ func TestOpenRejectsTampering(t *testing.T) {
 		t.Fatal("falsche Version im Envelope wurde akzeptiert")
 	}
 }
+
+func TestValidateRejectsCatchAllTrustedSource(t *testing.T) {
+	for _, s := range []string{"0.0.0.0/0", "::/0", "10.0.0.0/4"} {
+		p := basePolicy()
+		p.Trusted = []string{s}
+		if err := Validate(p, nil); err == nil {
+			t.Errorf("trusted %s muss abgelehnt werden", s)
+		}
+	}
+}

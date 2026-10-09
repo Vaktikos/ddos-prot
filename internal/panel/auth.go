@@ -163,6 +163,8 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	}
 	now := a.now()
 	if disabled || (locked != nil && locked.After(now)) || len(req.Password) > maxPasswordLen {
+		// Same cost as a real check, so response time does not reveal locked or disabled accounts.
+		VerifyPassword(req.Password[:min(len(req.Password), maxPasswordLen)], dummyHash)
 		writeErr(w, http.StatusUnauthorized, "anmeldung fehlgeschlagen")
 		return
 	}

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -32,6 +33,8 @@ const (
 	// maxEventsPerHeartbeat keeps one request well below the panel's body limit,
 	// so a backlog after an outage drains over several heartbeats instead of failing.
 	maxEventsPerHeartbeat = 300
+	// conntrackWarnPercent is where the host reports degraded health for a nearly full table.
+	conntrackWarnPercent = 80
 	// urgentMinGap bounds how often an incident change may trigger an immediate heartbeat.
 	urgentMinGap = 5 * time.Second
 )
@@ -52,6 +55,8 @@ type HostCounters struct {
 	Net metrics.NetCounters
 	CPU metrics.CPUTimes
 	Mem metrics.MemInfo
+	// ConntrackCount and ConntrackMax are zero when connection tracking is not loaded.
+	ConntrackCount, ConntrackMax uint64
 }
 
 // Event is an entry in the outbox that is delivered to the panel with the next heartbeat.
@@ -90,6 +95,7 @@ type HostReport struct {
 	TxPPS        float64 `json:"tx_pps"`
 	RxDropsTotal uint64  `json:"rx_drops_total"`
 	TxDropsTotal uint64  `json:"tx_drops_total"`
+	ConntrackPct float64 `json:"conntrack_percent"`
 }
 
 // TargetReport holds the last measured rates of one protected target.
@@ -116,6 +122,7 @@ type HeartbeatReply struct {
 	ApprovedPlanIDs      []string  `json:"approved_plan_ids"`
 	RejectedPlanIDs      []string  `json:"rejected_plan_ids"`
 	ServerTime           time.Time `json:"server_time"`
+	RotateKey            bool      `json:"rotate_key"`
 }
 
 // Agent holds all runtime state. It is driven by one goroutine (Run), so it needs no locks.
@@ -201,25 +208,56 @@ func (a *Agent) adopt(env policy.Envelope, source string) error {
 	if p.NodeID != "" && p.NodeID != a.nodeID {
 		return fmt.Errorf("policy gehört zu Node %s, nicht zu %s", p.NodeID, a.nodeID)
 	}
-	if err := a.store.SaveEnvelope(env); err != nil {
-		return fmt.Errorf("policy-cache schreiben: %w", err)
+	// The heartbeat reply that announces a version is not signed, so an attacker could
+	// replay an old but validly signed envelope. Versions must only move forward.
+	if p.Version <= a.applied {
+		return fmt.Errorf("policy-version %d ist nicht neuer als die aktive Version %d", p.Version, a.applied)
 	}
 	prev := a.pol
 	a.pol, a.envelope = p, env
 	if prev != nil && p.Mode != prev.Mode {
 		a.emit("policy", "mode_changed", map[string]string{"from": prev.Mode, "to": p.Mode})
 	}
+	a.forgetRemovedTargets(prev, p) // before rendering: mitigations of removed targets must not reach the ruleset
 	if err := a.applyRules(a.now()); err != nil {
 		a.pol = prev
 		a.policyErr = err.Error()
 		a.emit("policy", "apply_failed", map[string]any{"version": p.Version, "error": err.Error()})
 		return fmt.Errorf("anwenden fehlgeschlagen: %w", err)
 	}
+	// Cache only what the kernel accepted, so a restart never reloads a rejected policy.
+	if err := a.store.SaveEnvelope(env); err != nil {
+		a.log.Error("policy-cache nicht schreibbar, Neustart ohne Panel nutzt die vorherige Policy", "err", err)
+	}
 	a.applied = p.Version
 	a.policyErr = ""
 	a.emit("policy", "applied", map[string]any{"version": p.Version, "source": source, "sha256": env.SHA256})
 	a.log.Info("policy angewendet", "version", p.Version, "mode", p.Mode, "source", source)
 	return nil
+}
+
+// forgetRemovedTargets closes incidents and drops detection state of targets that a new
+// policy no longer protects, so nothing keeps an orphaned mitigation alive.
+func (a *Agent) forgetRemovedTargets(old, cur *policy.Policy) {
+	if old == nil {
+		return
+	}
+	keep := map[string]bool{}
+	for _, t := range cur.Targets {
+		if pre, err := netaddr.ParsePrefix(t.Prefix); err == nil {
+			keep[pre.String()] = true
+		}
+	}
+	for _, key := range a.engine.Keys() {
+		prefix, _, _ := strings.Cut(key, "|")
+		if keep[prefix] {
+			continue
+		}
+		if ch, ok := a.engine.Forget(key, a.now()); ok {
+			a.handleChange(ch, a.now())
+		}
+		delete(a.targets, key)
+	}
 }
 
 // applyRules renders the table from the current policy and active mitigations.
@@ -290,6 +328,8 @@ func (a *Agent) Tick(now time.Time) {
 			SYN:     a.delta(counters, base+"_syn", false),
 			UDP:     a.delta(counters, base+"_udp", false),
 			ICMP:    a.delta(counters, base+"_icmp", false),
+			Frag:    a.delta(counters, base+"_frag", false),
+			Invalid: a.delta(counters, base+"_inv", false),
 		}
 		dropped := a.delta(counters, base+"_rl", false)
 		a.observeServices(counters, now, dt, pre, t, base, prof)
@@ -447,6 +487,12 @@ func (a *Agent) sampleHost(now time.Time) {
 		return
 	}
 	prev := *a.host0
+	if cur.Net.RxBytes < prev.Net.RxBytes || cur.Net.TxBytes < prev.Net.TxBytes ||
+		cur.Net.RxPackets < prev.Net.RxPackets || cur.Net.TxPackets < prev.Net.TxPackets {
+		// An interface vanished or counters reset; skip this sample instead of reporting a huge rate.
+		a.host0, a.hostAt = &cur, now
+		return
+	}
 	a.hostReport = HostReport{
 		CPUPercent:   metrics.CPUPercent(prev.CPU, cur.CPU),
 		MemUsedPct:   cur.Mem.MemUsedPercent(),
@@ -456,6 +502,7 @@ func (a *Agent) sampleHost(now time.Time) {
 		TxPPS:        float64(cur.Net.TxPackets-prev.Net.TxPackets) / dt,
 		RxDropsTotal: cur.Net.RxDrops,
 		TxDropsTotal: cur.Net.TxDrops,
+		ConntrackPct: metrics.ConntrackPercent(cur.ConntrackCount, cur.ConntrackMax),
 	}
 	a.host0, a.hostAt = &cur, now
 }
@@ -510,12 +557,71 @@ func (a *Agent) sendHeartbeat(ctx context.Context, now time.Time) (HeartbeatRepl
 		DroppedEvents: a.dropped,
 	}
 	reply, err := a.client.Heartbeat(ctx, a.nodeID, a.priv, hb)
+	if err != nil && a.promoteNextKey(err) {
+		reply, err = a.client.Heartbeat(ctx, a.nodeID, a.priv, hb)
+		if err == nil {
+			a.finishKeyPromotion()
+		}
+	}
 	if err != nil {
 		return reply, err
 	}
 	a.outbox = a.outbox[len(hb.Events):]
 	a.applyDecisions(reply)
+	if reply.RotateKey {
+		if err := a.rotateKey(ctx); err != nil {
+			a.log.Error("schlüsselrotation fehlgeschlagen", "err", err)
+			a.setError("schlüsselrotation: " + err.Error())
+		} else {
+			a.clearError("schlüsselrotation")
+		}
+	}
 	return reply, nil
+}
+
+// rotateKey replaces the node identity in two phases so a crash cannot lock the node out:
+// the new key is written to disk first, then the panel switches to it, then the file is promoted.
+func (a *Agent) rotateKey(ctx context.Context) error {
+	pub, priv, err := identity.GenerateKey()
+	if err != nil {
+		return err
+	}
+	next := filepath.Join(a.store.Dir, nextIdentityName)
+	if err := identity.SaveKey(next, priv); err != nil {
+		return err
+	}
+	if err := a.client.RotateKey(ctx, a.nodeID, a.priv, pub); err != nil {
+		_ = os.Remove(next) // the panel kept the old key, so the new one is useless
+		return err
+	}
+	a.priv = priv
+	a.finishKeyPromotion()
+	a.log.Info("node-schlüssel rotiert")
+	a.emit("policy", "key_rotated", map[string]string{"fingerprint": identity.Fingerprint(pub)})
+	return nil
+}
+
+// promoteNextKey handles a crash between "panel accepted the new key" and "file promoted":
+// if the old key is refused and a pending next key exists, switch to it.
+func (a *Agent) promoteNextKey(cause error) bool {
+	var he *HTTPError
+	if !errors.As(cause, &he) || he.Status != http.StatusUnauthorized {
+		return false
+	}
+	priv, err := identity.LoadKey(filepath.Join(a.store.Dir, nextIdentityName))
+	if err != nil {
+		return false
+	}
+	a.priv = priv
+	return true
+}
+
+// finishKeyPromotion makes the pending key the permanent identity.
+func (a *Agent) finishKeyPromotion() {
+	next := filepath.Join(a.store.Dir, nextIdentityName)
+	if err := os.Rename(next, filepath.Join(a.store.Dir, identityFileName)); err != nil && !os.IsNotExist(err) {
+		a.log.Error("neuer schlüssel konnte nicht übernommen werden", "err", err)
+	}
 }
 
 func (a *Agent) pendingEvents() []Event {
@@ -624,6 +730,9 @@ func (a *Agent) health() Health {
 	if a.policyErr != "" {
 		h.Errors = append(h.Errors, "policy: "+a.policyErr)
 	}
+	if a.hostReport.ConntrackPct >= conntrackWarnPercent {
+		h.Errors = append(h.Errors, fmt.Sprintf("conntrack-Tabelle zu %.0f %% belegt: Verbindungserschöpfung droht", a.hostReport.ConntrackPct))
+	}
 	if !a.rules.Installed() && a.pol != nil {
 		h.Errors = append(h.Errors, "nftables-Tabelle nicht vorhanden")
 	}
@@ -663,6 +772,7 @@ func (a *Agent) emit(typ, action string, payload any) {
 func thresholdsOf(p policy.Profile) detect.Thresholds {
 	return detect.Thresholds{
 		TotalPPS: p.TotalPPS, SYNPPS: p.SYNPPS, UDPPPS: p.UDPPPS, ICMPPPS: p.ICMPPPS, ConnPPS: 0,
+		FragPPS: p.FragPPS, InvalidPPS: p.InvalidPPS,
 		BaselineMultiplier: p.BaselineMultiplier, MinPPS: p.MinPPS,
 		ConfirmSeconds: p.ConfirmSeconds, ClearSeconds: p.ClearSeconds,
 	}
@@ -732,6 +842,11 @@ func HostSampler(uplinks []string) HostSource {
 		}
 		if hc.Mem, err = metrics.ReadFile(metrics.ProcMem, metrics.ReadMem); err != nil {
 			return hc, err
+		}
+		// Connection tracking is optional; a missing file is not an error.
+		if n, err := metrics.ReadFile(metrics.ProcConntrackCount, metrics.ReadUint); err == nil {
+			hc.ConntrackCount = n
+			hc.ConntrackMax, _ = metrics.ReadFile(metrics.ProcConntrackMax, metrics.ReadUint)
 		}
 		return hc, nil
 	}

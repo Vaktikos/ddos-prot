@@ -44,6 +44,9 @@ func activeMitigations() []Active {
 		{ID: "inc1-syn", IncidentID: "inc1", Kind: KindSYNRate, Target: netip.MustParsePrefix("192.0.2.10/32"), Rate: 100, AutoBlockSeconds: 300},
 		{ID: "inc1-udp", IncidentID: "inc1", Kind: KindUDPRate, Target: netip.MustParsePrefix("192.0.2.10/32"), Rate: 500},
 		{ID: "inc2-udp", IncidentID: "inc2", Kind: KindUDPRate, Target: netip.MustParsePrefix("2001:db8:1::10/128"), Rate: 300, AutoBlockSeconds: 60},
+		{ID: "inc3-frag", IncidentID: "inc3", Kind: KindDropFrag, Target: netip.MustParsePrefix("192.0.2.10/32")},
+		{ID: "inc3-inv", IncidentID: "inc3", Kind: KindDropInvalid, Target: netip.MustParsePrefix("192.0.2.10/32")},
+		{ID: "inc4-frag", IncidentID: "inc4", Kind: KindDropFrag, Target: netip.MustParsePrefix("2001:db8:1::10/128")},
 	}
 }
 
@@ -57,12 +60,17 @@ func TestRenderContainsRequiredRules(t *testing.T) {
 		"delete table inet sentinel_shield",
 		"ip saddr @trusted4 accept",
 		"ip saddr @mgmt4 accept",
-		"ip daddr 192.0.2.10/32 tcp dport 443 tcp flags & (syn | ack) == syn meter ss_t0_tcp443",
+		"ip daddr 192.0.2.10/32 tcp dport 443 tcp flags & (fin | syn | rst | ack) == syn meter ss_t0_tcp443",
 		"add @dyn4 { ip saddr timeout 300s }",
 		"ip6 daddr 2001:db8:1::10/128 meta l4proto udp meter",
 		"add @dyn6 { ip6 saddr timeout 60s }",
 		"set blk4 { type ipv4_addr; flags interval,timeout; elements = { 203.0.113.5/32 timeout 3600s",
 		"counter name \"t0_syn\"",
+		`ip daddr 192.0.2.10/32 ip frag-off & 0x3fff != 0 counter name "t0_rl" drop comment "inc3"`,
+		`ip daddr 192.0.2.10/32 tcp flags & (fin | syn) == fin | syn counter name "t0_rl" drop comment "inc3"`,
+		`ip6 daddr 2001:db8:1::10/128 exthdr frag exists counter name "t1_rl" drop comment "inc4"`,
+		`ip daddr 192.0.2.10/32 ip frag-off & 0x3fff != 0 counter name "t0_frag"`,
+		`tcp flags & (fin | psh | urg) == fin | psh | urg counter name "t0_inv"`,
 		"counter name \"t0_s0_pkts\"",
 	}
 	for _, want := range mustContain {

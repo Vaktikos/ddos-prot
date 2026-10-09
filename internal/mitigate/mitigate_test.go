@@ -99,3 +99,22 @@ func TestWithoutIncidentRemovesOnlyThatIncident(t *testing.T) {
 		t.Fatalf("falsche Entfernung: %+v", kept)
 	}
 }
+
+func TestFragmentAndInvalidFlagMitigationFollowProfile(t *testing.T) {
+	p := profile()
+	p.Mitigation.DropFragments = true
+	d := Decide(event(detect.CategoryFragFlood, detect.VerdictConfirmed), p, policy.ModeAuto, 0, 100)
+	if len(d.Plans) != 1 || d.Plans[0].Kind != "drop_fragments" || d.Plans[0].AutoBlockSeconds != 0 {
+		t.Fatalf("Fragmentflut mit erlaubtem Drop: %+v", d.Plans)
+	}
+	// Not allowed by the profile: only escalate.
+	d = Decide(event(detect.CategoryInvalidFlags, detect.VerdictConfirmed), profile(), policy.ModeAuto, 0, 100)
+	if len(d.Plans) != 0 || !d.Escalate {
+		t.Fatalf("ohne Profilfreigabe darf nur eskaliert werden: %+v", d)
+	}
+	p.Mitigation.DropInvalid = true
+	d = Decide(event(detect.CategoryInvalidFlags, detect.VerdictConfirmed), p, policy.ModeDryRun, 0, 100)
+	if len(d.Plans) != 1 || !d.Plans[0].DryRun {
+		t.Fatalf("Dry-Run muss auch hier nur vorschlagen: %+v", d.Plans)
+	}
+}

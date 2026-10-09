@@ -9,11 +9,11 @@ Ein Agent auf dem Zielserver kann nur Pakete verwerfen, die **bei ihm ankommen**
 | UDP-Flood, Reflection mit kleinem Volumen | Erkennung; quellbezogene Ratenbegrenzung (`udp_rate_per_source`) | Bei gesättigter Leitung: Scrubbing beim Provider |
 | TCP-SYN-Flood auf Dienste | Erkennung; SYN-Ratenlimit pro Quelle; temporäre Quellsperre im Kernel | Bei Volumen über der Leitungskapazität: Scrubbing / Anycast |
 | ICMP-Flood | Erkennung (Zähler und Schwelle), **keine** automatische Mitigation | Upstream-Filter für ICMP empfohlen |
-| Verbindungserschöpfung (viele halboffene oder offene Verbindungen) | Nur über SYN-Zählung sichtbar; keine Connection-Tabellen-Auswertung | conntrack-Limits oder Proxy/LB mit Verbindungslimits |
-| Fragmentierungsangriffe | **Nicht implementiert** (keine Fragment-Zähler im Ruleset) | Upstream-Normalisierung |
-| Protokollanomalien (ungültige Flags) | **Nicht implementiert** | Vorgelagerte Normalisierung |
+| Verbindungserschöpfung | Host-Ebene: Auslastung der conntrack-Tabelle wird überwacht, ab 80 % meldet der Node `degraded`. Pro Ziel nur über SYN-Zählung und `conn_pps` sichtbar | conntrack-Limits oder Proxy/LB mit Verbindungslimits |
+| Fragmentierungsangriffe | Erkennung (`frag_pps`, Zähler für IPv4-Fragmente und IPv6-Fragment-Header); bei Vorfall optional Verwerfen (`drop_fragments`) | Upstream-Normalisierung bei hohem Volumen |
+| Ungültige TCP-Flags (Null, Xmas, SYN+FIN, SYN+RST, FIN ohne ACK) | Erkennung (`invalid_pps`); bei Vorfall optional Verwerfen (`drop_invalid`). Weitere Protokollanomalien sind nicht abgedeckt | Vorgelagerte Normalisierung |
 | Angriffe auf einzelne Ports | Zähler je Dienst (Pakete, SYN); Ratenlimit je Port | Port-Filter vor dem Server |
-| Layer 7 (HTTP-Floods, Request-Muster) | **Nicht implementiert** | Reverse Proxy oder WAF mit Rate-Limits |
+| Layer 7 (HTTP-Floods, Request-Muster) | **Nicht implementiert.** Eine nginx-Vorlage mit Rate- und Verbindungslimits liegt in `deploy/l7/`; das Panel liest diese Logs nicht | Reverse Proxy oder WAF mit Rate-Limits |
 | Verbindungsflut auf einen Minecraft-Port | Erkannt über neue Verbindungen je Dienstport (`conn_pps`, SYN-Zähler, ohne SYN-Verhältnis). Mitigation über das SYN-Ratenlimit, das alle TCP-Dienste des Ziels betrifft | Bei Volumen über der Leitung: Scrubbing |
 | Minecraft-Handshake, Status-Pings, Spielerzahl | **Nicht implementiert.** Erkennung läuft nur auf Zählerebene, ohne Protokollinspektion | Minecraft-aware Proxy mit Protokollprüfung |
 | Minecraft-Bedrock (UDP) | Wie generisches UDP; keine Verbindungsrate, weil UDP keine Verbindungen kennt | Upstream-Filter |

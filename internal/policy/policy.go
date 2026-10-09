@@ -75,6 +75,10 @@ type Profile struct {
 	// ConnPPS limits new connection attempts per second on a single service port.
 	// Intended for game servers such as Minecraft, where normal traffic is mostly established packets.
 	ConnPPS float64 `json:"conn_pps"`
+	// FragPPS and InvalidPPS flag IP fragments and TCP packets with impossible flag
+	// combinations (null, xmas, SYN+FIN, SYN+RST, FIN without ACK) per target.
+	FragPPS    float64 `json:"frag_pps"`
+	InvalidPPS float64 `json:"invalid_pps"`
 
 	// Adaptive detection: a hit when pps >= max(MinPPS, baseline*BaselineMultiplier).
 	BaselineMultiplier float64 `json:"baseline_multiplier"`
@@ -98,6 +102,10 @@ type Mitigation struct {
 	// AutoBlockSeconds, when positive, lets the kernel temporarily block sources that
 	// exceed the per-source rates. Trusted and management addresses are always accepted first.
 	AutoBlockSeconds int `json:"auto_block_seconds"`
+	// DropFragments and DropInvalid allow dropping fragments / invalid TCP flag packets
+	// toward the target while a matching incident is confirmed.
+	DropFragments bool `json:"drop_fragments"`
+	DropInvalid   bool `json:"drop_invalid"`
 }
 
 // ManualBlock is an operator-approved temporary block of a source prefix.
@@ -240,6 +248,10 @@ func Validate(p *Policy, mgmt []netip.Prefix) error {
 	var trusted []netip.Prefix
 	for _, s := range p.Trusted {
 		pre, err := netaddr.ParsePrefix(s)
+		if err == nil {
+			// A trusted source bypasses every block, so it must not be a catch-all network.
+			err = netaddr.ValidateProtected(pre)
+		}
 		if err != nil {
 			add("vertrauenswürdige Quelle: %v", err)
 			continue
@@ -289,6 +301,7 @@ func validateProfile(name string, prof Profile) []error {
 	for label, v := range map[string]float64{
 		"total_pps": prof.TotalPPS, "syn_pps": prof.SYNPPS, "udp_pps": prof.UDPPPS,
 		"icmp_pps": prof.ICMPPPS, "min_pps": prof.MinPPS, "conn_pps": prof.ConnPPS,
+		"frag_pps": prof.FragPPS, "invalid_pps": prof.InvalidPPS,
 	} {
 		if v < 0 {
 			add("%s darf nicht negativ sein", label)
@@ -303,7 +316,7 @@ func validateProfile(name string, prof Profile) []error {
 	if prof.ClearSeconds < 1 || prof.ClearSeconds > 900 {
 		add("clear_seconds muss zwischen 1 und 900 liegen")
 	}
-	if prof.TotalPPS == 0 && prof.SYNPPS == 0 && prof.UDPPPS == 0 && prof.ICMPPPS == 0 && prof.ConnPPS == 0 && prof.BaselineMultiplier == 0 {
+	if prof.TotalPPS == 0 && prof.SYNPPS == 0 && prof.UDPPPS == 0 && prof.ICMPPPS == 0 && prof.ConnPPS == 0 && prof.FragPPS == 0 && prof.InvalidPPS == 0 && prof.BaselineMultiplier == 0 {
 		add("mindestens ein Erkennungsschwellwert muss gesetzt sein")
 	}
 	m := prof.Mitigation

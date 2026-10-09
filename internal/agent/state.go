@@ -24,6 +24,7 @@ const (
 	nodeFileName     = "node.json"
 	identityFileName = "identity.key"
 	policyCacheName  = "policy-cache.json"
+	nextIdentityName = "identity.key.next"
 )
 
 // Store persists identity and the last verified policy so that the agent can

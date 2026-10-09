@@ -36,6 +36,10 @@ const (
 	CategoryICMPFlood   Category = "icmp_flood"
 	// CategoryConnRate is a surge of new connection attempts to one service port.
 	CategoryConnRate Category = "connection_rate"
+	// CategoryFragFlood is a surge of IP fragments; CategoryInvalidFlags a surge of TCP
+	// packets with impossible flag combinations.
+	CategoryFragFlood    Category = "fragment_flood"
+	CategoryInvalidFlags Category = "invalid_flags"
 )
 
 // Sample is a counter delta for one target over Interval.
@@ -47,6 +51,8 @@ type Sample struct {
 	SYN      uint64 // TCP packets with SYN set and ACK clear (new connection attempts)
 	UDP      uint64
 	ICMP     uint64
+	Frag     uint64 // IP fragments
+	Invalid  uint64 // TCP packets with invalid flag combinations
 }
 
 // Thresholds mirror the relevant fields of a protection profile.
@@ -56,6 +62,8 @@ type Thresholds struct {
 	UDPPPS             float64
 	ICMPPPS            float64
 	ConnPPS            float64 // new connection attempts per second on one service
+	FragPPS            float64
+	InvalidPPS         float64
 	BaselineMultiplier float64
 	MinPPS             float64
 	ConfirmSeconds     int
@@ -143,7 +151,10 @@ func (e *Engine) Observe(target string, s Sample, th Thresholds) ([]Change, erro
 	udpPPS := float64(s.UDP) / sec
 	icmpPPS := float64(s.ICMP) / sec
 
-	abs, absCat := absoluteHit(th, pps, synPPS, udpPPS, icmpPPS)
+	abs, absCat := absoluteHit(th, rates{
+		pps: pps, syn: synPPS, udp: udpPPS, icmp: icmpPPS,
+		frag: float64(s.Frag) / sec, invalid: float64(s.Invalid) / sec,
+	})
 	adaptive := false
 	if !abs && th.BaselineMultiplier > 0 && st.baselineN >= baselineWarmup {
 		limit := st.baseline * th.BaselineMultiplier
@@ -205,6 +216,15 @@ func (e *Engine) Active(target string) (Event, bool) {
 	return *st.active, true
 }
 
+// Keys returns the keys of all targets the engine holds state for.
+func (e *Engine) Keys() []string {
+	out := make([]string, 0, len(e.targets))
+	for k := range e.targets {
+		out = append(out, k)
+	}
+	return out
+}
+
 // Forget drops all state for a target, for example after it was removed from policy.
 // An open event is returned as closed at the given time.
 func (e *Engine) Forget(target string, now time.Time) (Change, bool) {
@@ -218,8 +238,16 @@ func (e *Engine) Forget(target string, now time.Time) (Change, bool) {
 	return Change{Kind: "closed", Event: ev}, true
 }
 
-func absoluteHit(th Thresholds, pps, syn, udp, icmp float64) (bool, Category) {
+// rates are per-second values of one sample.
+type rates struct{ pps, syn, udp, icmp, frag, invalid float64 }
+
+func absoluteHit(th Thresholds, r rates) (bool, Category) {
+	pps, syn, udp, icmp := r.pps, r.syn, r.udp, r.icmp
 	switch {
+	case th.InvalidPPS > 0 && r.invalid >= th.InvalidPPS:
+		return true, CategoryInvalidFlags
+	case th.FragPPS > 0 && r.frag >= th.FragPPS:
+		return true, CategoryFragFlood
 	case th.SYNPPS > 0 && syn >= th.SYNPPS && syn >= pps*0.5:
 		return true, CategorySYNFlood
 	case th.UDPPPS > 0 && udp >= th.UDPPPS:

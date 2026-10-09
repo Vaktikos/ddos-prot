@@ -113,6 +113,10 @@ func parseCIDRs(in []string) ([]string, error) {
 	out := make([]string, 0, len(in))
 	for _, s := range in {
 		p, err := netaddr.ParsePrefix(s)
+		if err == nil {
+			// A management network is never blocked, so a catch-all would switch blocking off.
+			err = netaddr.ValidateProtected(p)
+		}
 		if err != nil {
 			return nil, err
 		}

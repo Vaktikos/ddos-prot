@@ -272,3 +272,35 @@ func TestConnectionRateDetectsSYNSurgeWithoutRatioCheck(t *testing.T) {
 		t.Fatal("Verbindungsflut auf einem Dienst muss als bestätigte connection_rate erkannt werden")
 	}
 }
+
+func TestFragmentAndInvalidFlagFloodsAreConfirmed(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		th   Thresholds
+		smp  Sample
+		want Category
+	}{
+		{"fragmente", Thresholds{FragPPS: 1000, ConfirmSeconds: 3, ClearSeconds: 4}, Sample{Packets: 5000, Frag: 4000}, CategoryFragFlood},
+		{"ungueltige flags", Thresholds{InvalidPPS: 500, ConfirmSeconds: 3, ClearSeconds: 4}, Sample{Packets: 3000, Invalid: 2500}, CategoryInvalidFlags},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := NewEngine(func() string { return "x" })
+			at := t0
+			var got Category
+			for i := 0; i < 6; i++ {
+				at = at.Add(time.Second)
+				s := tc.smp
+				s.At, s.Interval = at, time.Second
+				ch, _ := e.Observe("192.0.2.1/32", s, tc.th)
+				for _, c := range ch {
+					if c.Event.Verdict == VerdictConfirmed {
+						got = c.Event.Category
+					}
+				}
+			}
+			if got != tc.want {
+				t.Fatalf("Kategorie = %q, erwartet %q", got, tc.want)
+			}
+		})
+	}
+}

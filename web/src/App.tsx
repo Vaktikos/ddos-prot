@@ -3,17 +3,21 @@ import { api, setCsrf } from "./api";
 import Login from "./pages/Login";
 import DashboardPage from "./pages/Dashboard";
 import NodesPage from "./pages/Nodes";
+import ProfilesPage from "./pages/Profiles";
+import AccountPage from "./pages/Account";
 import { AlertsPage, AuditPage, IncidentsPage } from "./pages/Incidents";
 import type { User } from "./types";
 
-type View = "dashboard" | "nodes" | "incidents" | "alerts" | "audit";
+type View = "dashboard" | "nodes" | "profiles" | "incidents" | "alerts" | "audit" | "account";
 
 const views: { id: View; label: string; roles: User["role"][] }[] = [
   { id: "dashboard", label: "Übersicht", roles: ["viewer", "operator", "admin"] },
   { id: "nodes", label: "Nodes", roles: ["viewer", "operator", "admin"] },
+  { id: "profiles", label: "Profile", roles: ["viewer", "operator", "admin"] },
   { id: "incidents", label: "Vorfälle", roles: ["viewer", "operator", "admin"] },
   { id: "alerts", label: "Alarme & Freigaben", roles: ["viewer", "operator", "admin"] },
   { id: "audit", label: "Audit", roles: ["admin"] },
+  { id: "account", label: "Konto", roles: ["viewer", "operator", "admin"] },
 ];
 
 export default function App() {
@@ -62,7 +66,9 @@ export default function App() {
       <main className="mx-auto max-w-7xl px-4 py-6">
         {view === "dashboard" && <DashboardPage onOpenNode={(id) => { setNodeId(id); setView("nodes"); }} />}
         {view === "nodes" && <NodesPage user={user} nodeId={nodeId} onOpen={setNodeId} />}
+        {view === "profiles" && <ProfilesPage user={user} />}
         {view === "incidents" && <IncidentsPage />}
+        {view === "account" && <AccountPage user={user} />}
         {view === "alerts" && <AlertsPage user={user} />}
         {view === "audit" && user.role === "admin" && <AuditPage />}
       </main>

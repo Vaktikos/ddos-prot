@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -41,7 +42,21 @@ func Open(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 // Migrate applies all pending migrations in order. Each runs in its own transaction
 // and its checksum is recorded. A changed, already-applied file is an error.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
-	if _, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+	// Several panel instances may start at once; an advisory lock lets only one migrate.
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	const lockID = 7264819350 // arbitrary constant owned by Sentinel Shield migrations
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, lockID); err != nil {
+		return err
+	}
+	defer conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, lockID)
+
+	// All work below uses this one locked connection: waiting instances each hold a
+	// connection, so asking the pool for another one could starve the lock holder.
+	if _, err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version text PRIMARY KEY,
 		checksum text NOT NULL,
 		applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
@@ -66,22 +81,22 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		checksum := hex.EncodeToString(sum[:])
 
 		var existing string
-		err = pool.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version = $1`, name).Scan(&existing)
+		err = conn.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version = $1`, name).Scan(&existing)
 		if err == nil {
 			if existing != checksum {
 				return fmt.Errorf("migration %s wurde nachträglich verändert", name)
 			}
 			continue
 		}
-		if err := applyOne(ctx, pool, name, string(body), checksum); err != nil {
+		if err := applyOne(ctx, conn.Conn(), name, string(body), checksum); err != nil {
 			return fmt.Errorf("migration %s: %w", name, err)
 		}
 	}
 	return nil
 }
 
-func applyOne(ctx context.Context, pool *pgxpool.Pool, name, sql, checksum string) error {
-	tx, err := pool.Begin(ctx)
+func applyOne(ctx context.Context, conn *pgx.Conn, name, sql, checksum string) error {
+	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return err
 	}

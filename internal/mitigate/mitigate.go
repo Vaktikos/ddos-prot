@@ -57,16 +57,27 @@ func Decide(ev detect.Event, prof policy.Profile, mode string, dynUsed, dynMax i
 		kind, rate = nft.KindSYNRate, prof.Mitigation.SYNRatePerSource
 	case detect.CategoryUDPFlood:
 		kind, rate = nft.KindUDPRate, prof.Mitigation.UDPRatePerSource
+	case detect.CategoryFragFlood:
+		if prof.Mitigation.DropFragments {
+			kind, rate = nft.KindDropFrag, 1
+		}
+	case detect.CategoryInvalidFlags:
+		if prof.Mitigation.DropInvalid {
+			kind, rate = nft.KindDropInvalid, 1
+		}
 	default:
 		d.Note = fmt.Sprintf("%s: keine automatische Maßnahme für diese Kategorie, Administratoren werden benachrichtigt", ev.Category)
 		return d
 	}
-	if rate <= 0 {
+	if kind == "" || rate <= 0 {
 		d.Note = fmt.Sprintf("%s: Profil erlaubt keine Ratenbegrenzung", ev.Category)
 		return d
 	}
 
 	autoBlock := prof.Mitigation.AutoBlockSeconds
+	if kind == nft.KindDropFrag || kind == nft.KindDropInvalid {
+		autoBlock = 0 // these drop rules act on packet shape, not on sources
+	}
 	if autoBlock > 0 && dynUsed >= dynMax {
 		autoBlock = 0
 		d.Note = "Sperrliste voll: nur Ratenbegrenzung, keine zeitweisen Quellsperren"

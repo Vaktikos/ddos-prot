@@ -426,3 +426,84 @@ func TestConfigRequiresManagementNetwork(t *testing.T) {
 		t.Fatalf("gültige Konfiguration abgelehnt: %v", err)
 	}
 }
+
+func TestRemovingTargetClosesIncidentAndMitigation(t *testing.T) {
+	e := setupEnv(t)
+	e.panel.publish(t, testPolicy(1, policy.ModeAuto))
+	a := e.newAgent(t)
+	_ = a.Heartbeat(context.Background(), time.Now())
+	d := &driver{t: t, a: a, rules: e.rules, now: time.Now()}
+	d.quiet(5)
+	d.attack(6)
+	if !strings.Contains(e.rules.lastScript(), "meter ss_t0_tcp443") {
+		t.Fatal("Vorbedingung: Mitigation muss aktiv sein")
+	}
+	// Version 2 protects a different address only.
+	p2 := testPolicy(2, policy.ModeAuto)
+	p2.Targets[0].Prefix = "192.0.2.77/32"
+	e.panel.publish(t, p2)
+	_ = a.Heartbeat(context.Background(), d.now)
+	if a.applied != 2 {
+		t.Fatalf("neue Policy nicht angewendet: applied=%d err=%q", a.applied, a.policyErr)
+	}
+	if strings.Contains(e.rules.lastScript(), "meter ss_") || len(a.plans) != 0 {
+		t.Fatal("Mitigation des entfernten Ziels muss verschwinden")
+	}
+	if _, active := a.engine.Active("192.0.2.10/32"); active {
+		t.Fatal("Erkennungszustand des entfernten Ziels muss verworfen sein")
+	}
+}
+
+func TestOlderSignedPolicyIsRejected(t *testing.T) {
+	e := setupEnv(t)
+	e.panel.publish(t, testPolicy(5, policy.ModeDryRun))
+	a := e.newAgent(t)
+	_ = a.Heartbeat(context.Background(), time.Now())
+	if a.applied != 5 {
+		t.Fatal("Ausgangszustand fehlt")
+	}
+	// Replay of a validly signed but older envelope while the reply claims a newer version.
+	old, _ := policy.Sign(e.panelKey, testPolicy(3, policy.ModeAuto))
+	e.panel.mu.Lock()
+	e.panel.env = old
+	e.panel.reply.DesiredPolicyVersion = 6
+	e.panel.mu.Unlock()
+	_ = a.Heartbeat(context.Background(), time.Now())
+	if a.applied != 5 || a.pol.Mode != policy.ModeDryRun {
+		t.Fatalf("alte Policy wurde übernommen: applied=%d mode=%s", a.applied, a.pol.Mode)
+	}
+}
+
+func TestRejectedPolicyIsNotCached(t *testing.T) {
+	e := setupEnv(t)
+	e.panel.publish(t, testPolicy(1, policy.ModeDryRun))
+	e.rules.failApply = true
+	a := e.newAgent(t)
+	_ = a.Heartbeat(context.Background(), time.Now())
+	if env, _ := (Store{Dir: e.dir}).LoadEnvelope(); env != nil {
+		t.Fatal("eine vom Kernel abgelehnte Policy darf nicht im Cache landen")
+	}
+}
+
+func TestNearlyFullConntrackTableDegradesHealth(t *testing.T) {
+	e := setupEnv(t)
+	e.panel.publish(t, testPolicy(1, policy.ModeDryRun))
+	client, _ := NewPanelClient(e.cfg.PanelURL, "")
+	count := uint64(100)
+	host := func() (HostCounters, error) {
+		return HostCounters{ConntrackCount: count, ConntrackMax: 1000}, nil
+	}
+	a, err := New(e.cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), e.rules, host, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = a.Heartbeat(context.Background(), time.Now())
+	now := time.Now()
+	a.Tick(now)
+	count = 900
+	a.Tick(now.Add(time.Second))
+	h := a.health()
+	if h.Status != "degraded" || !strings.Contains(strings.Join(h.Errors, " "), "conntrack") {
+		t.Fatalf("90 %% conntrack muss degraded melden: %+v", h)
+	}
+}
