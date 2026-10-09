@@ -106,6 +106,11 @@ type Mitigation struct {
 	// toward the target while a matching incident is confirmed.
 	DropFragments bool `json:"drop_fragments"`
 	DropInvalid   bool `json:"drop_invalid"`
+	// XDPSourcePPS, when positive, lets the agent block sources that send at least this many
+	// packets per second toward the target during a confirmed volumetric incident. It needs XDP
+	// to be enabled on the node and blocks for XDPBlockSeconds.
+	XDPSourcePPS    float64 `json:"xdp_source_pps"`
+	XDPBlockSeconds int     `json:"xdp_block_seconds"`
 }
 
 // ManualBlock is an operator-approved temporary block of a source prefix.
@@ -325,6 +330,12 @@ func validateProfile(name string, prof Profile) []error {
 	}
 	if m.AutoBlockSeconds > 86400 {
 		add("auto_block_seconds darf höchstens 86400 sein")
+	}
+	if m.XDPSourcePPS < 0 || m.XDPBlockSeconds < 0 || m.XDPBlockSeconds > 86400 {
+		add("xdp_source_pps und xdp_block_seconds müssen im gültigen Bereich liegen (Sperre höchstens 86400 s)")
+	}
+	if m.XDPSourcePPS > 0 && m.XDPBlockSeconds == 0 {
+		add("xdp_block_seconds muss gesetzt sein, wenn xdp_source_pps verwendet wird")
 	}
 	return errs
 }

@@ -39,6 +39,10 @@ type Decision struct {
 	Note     string // human-readable summary for the audit trail
 }
 
+// KindXDPBlock blocks the strongest sources in the XDP filter. It is applied by the agent,
+// not rendered into nftables.
+const KindXDPBlock = "xdp_block_sources"
+
 // Decide evaluates an event. Only confirmed attacks trigger countermeasures.
 // dynUsed and dynMax describe the kernel set of temporary source blocks; when it
 // is full, temporary blocks are withheld and only rate limits are used.
@@ -50,13 +54,18 @@ func Decide(ev detect.Event, prof policy.Profile, mode string, dynUsed, dynMax i
 
 	var kind string
 	var rate int
+	volumetric := false
 	switch ev.Category {
 	case detect.CategorySYNFlood, detect.CategoryConnRate:
 		// Connection surges are limited with the same per-source SYN rule. That rule
 		// applies to all TCP services of the target, not only the attacked port.
 		kind, rate = nft.KindSYNRate, prof.Mitigation.SYNRatePerSource
+		volumetric = true
 	case detect.CategoryUDPFlood:
 		kind, rate = nft.KindUDPRate, prof.Mitigation.UDPRatePerSource
+		volumetric = true
+	case detect.CategoryPacketFlood:
+		volumetric = true
 	case detect.CategoryFragFlood:
 		if prof.Mitigation.DropFragments {
 			kind, rate = nft.KindDropFrag, 1
@@ -65,22 +74,6 @@ func Decide(ev detect.Event, prof policy.Profile, mode string, dynUsed, dynMax i
 		if prof.Mitigation.DropInvalid {
 			kind, rate = nft.KindDropInvalid, 1
 		}
-	default:
-		d.Note = fmt.Sprintf("%s: keine automatische Maßnahme für diese Kategorie, Administratoren werden benachrichtigt", ev.Category)
-		return d
-	}
-	if kind == "" || rate <= 0 {
-		d.Note = fmt.Sprintf("%s: Profil erlaubt keine Ratenbegrenzung", ev.Category)
-		return d
-	}
-
-	autoBlock := prof.Mitigation.AutoBlockSeconds
-	if kind == nft.KindDropFrag || kind == nft.KindDropInvalid {
-		autoBlock = 0 // these drop rules act on packet shape, not on sources
-	}
-	if autoBlock > 0 && dynUsed >= dynMax {
-		autoBlock = 0
-		d.Note = "Sperrliste voll: nur Ratenbegrenzung, keine zeitweisen Quellsperren"
 	}
 
 	status, dryRun := StatusApplied, false
@@ -90,23 +83,35 @@ func Decide(ev detect.Event, prof policy.Profile, mode string, dynUsed, dynMax i
 	case policy.ModeApproval:
 		status = StatusPendingApproval
 	}
-
 	reason := fmt.Sprintf("bestätigter %s, Spitze %.0f pps (SYN %.0f, UDP %.0f, ICMP %.0f)",
 		ev.Category, ev.PeakPPS, ev.PeakSYNPPS, ev.PeakUDPPPS, ev.PeakICMPPS)
-	d.Plans = []Plan{{
-		ID:               fmt.Sprintf("%s-%s", ev.ID, kind),
-		IncidentID:       ev.ID,
-		Kind:             kind,
-		Target:           ev.Target,
-		Rate:             rate,
-		AutoBlockSeconds: autoBlock,
-		Status:           status,
-		DryRun:           dryRun,
-		Reason:           reason,
-		Proposed:         ev.Started,
-	}}
+	plan := func(kind string, rate, block int) Plan {
+		return Plan{
+			ID: fmt.Sprintf("%s-%s", ev.ID, kind), IncidentID: ev.ID, Kind: kind, Target: ev.Target,
+			Rate: rate, AutoBlockSeconds: block, Status: status, DryRun: dryRun, Reason: reason, Proposed: ev.Started,
+		}
+	}
+
+	if kind != "" && rate > 0 {
+		autoBlock := prof.Mitigation.AutoBlockSeconds
+		if kind == nft.KindDropFrag || kind == nft.KindDropInvalid {
+			autoBlock = 0 // these drop rules act on packet shape, not on sources
+		}
+		if autoBlock > 0 && dynUsed >= dynMax {
+			autoBlock = 0
+			d.Note = "Sperrliste voll: nur Ratenbegrenzung, keine zeitweisen Quellsperren"
+		}
+		d.Plans = append(d.Plans, plan(kind, rate, autoBlock))
+	}
+	if volumetric && prof.Mitigation.XDPSourcePPS > 0 {
+		d.Plans = append(d.Plans, plan(KindXDPBlock, int(prof.Mitigation.XDPSourcePPS), prof.Mitigation.XDPBlockSeconds))
+	}
+	if len(d.Plans) == 0 {
+		d.Note = fmt.Sprintf("%s: Profil erlaubt keine automatische Maßnahme, Administratoren werden benachrichtigt", ev.Category)
+		return d
+	}
 	if d.Note == "" {
-		d.Note = fmt.Sprintf("%s: %s, Modus %s", kind, status, mode)
+		d.Note = fmt.Sprintf("%d Maßnahme(n), Modus %s", len(d.Plans), mode)
 	}
 	return d
 }
