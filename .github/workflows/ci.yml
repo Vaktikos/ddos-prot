@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: sentinel_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Vet and format
+        run: |
+          go vet ./...
+          test -z "$(gofmt -l cmd internal)"
+      - name: Unit tests
+        run: go test -count=1 -race ./...
+      - name: Integration tests (PostgreSQL)
+        env:
+          SS_TEST_DSN: "host=127.0.0.1 port=5432 user=postgres password=ci-only-password dbname=sentinel_test sslmode=disable"
+        run: go test -count=1 -race ./internal/store/ ./internal/panel/
+
+  web:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run build

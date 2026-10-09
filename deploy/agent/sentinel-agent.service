@@ -1,0 +1,47 @@
+[Unit]
+Description=Sentinel Shield protection agent
+Documentation=https://github.com/vaktikos/ddos-prot/blob/main/docs/OPERATIONS.md
+Wants=network-online.target
+After=network-online.target nftables.service
+ConditionPathExists=/var/lib/sentinel-shield/node.json
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/sentinel-agent run --config /etc/sentinel-shield/agent.json
+Restart=always
+RestartSec=5
+# Protection must survive a crash: the table stays in the kernel after the process exits.
+KillMode=process
+User=root
+Group=root
+
+# The agent needs netlink access for nftables and read access to procfs. Nothing else.
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/sentinel-shield
+ReadOnlyPaths=/etc/sentinel-shield
+
+# Logs go to the journal; rotation is handled by journald (see docs/OPERATIONS.md).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sentinel-agent
+
+[Install]
+WantedBy=multi-user.target

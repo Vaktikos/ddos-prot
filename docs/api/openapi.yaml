@@ -1,0 +1,256 @@
+openapi: 3.0.3
+info:
+  title: Sentinel Shield Panel API
+  version: 0.1.0
+  description: |
+    Management API (session cookie + CSRF header) and agent API (Ed25519 request signatures).
+    All state-changing management requests require the `X-CSRF-Token` header and an `Origin`
+    matching PANEL_PUBLIC_URL. Agent requests carry `X-SS-Node`, `X-SS-Timestamp`, `X-SS-Nonce`
+    and `X-SS-Signature` (see docs/SECURITY.md).
+servers:
+  - url: https://panel.example.net:8443
+security:
+  - sessionCookie: []
+paths:
+  /api/v1/auth/login:
+    post:
+      security: []
+      summary: Sign in; sets the session cookie and returns the CSRF token.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LoginRequest' } } } }
+      responses:
+        '200': { description: Signed in, content: { application/json: { schema: { $ref: '#/components/schemas/LoginResponse' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /api/v1/auth/logout:
+    post: { summary: End the session., responses: { '200': { description: OK } } }
+  /api/v1/auth/me:
+    get: { summary: Current user and CSRF token., responses: { '200': { description: OK } } }
+  /api/v1/dashboard:
+    get:
+      summary: Live summary built only from measurements younger than 2 minutes.
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: object } } } } }
+  /api/v1/nodes:
+    get: { summary: List nodes., responses: { '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Node' } } } } } } }
+    post:
+      summary: Create a node and return its one-time enrollment token (admin).
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/NodeCreate' } } } }
+      responses: { '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/NodeCreated' } } } }, '400': { $ref: '#/components/responses/Error' } }
+  /api/v1/nodes/{id}:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get: { summary: Get a node., responses: { '200': { description: OK }, '404': { $ref: '#/components/responses/Error' } } }
+    patch: { summary: Update name, location or management networks (admin). Publishes a new policy., responses: { '200': { description: OK }, '422': { $ref: '#/components/responses/Error' } } }
+  /api/v1/nodes/{id}/mode:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post:
+      summary: Set operating mode (operator). Publishes a new policy.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [mode], properties: { mode: { type: string, enum: [dry_run, approval, auto] } } } } } }
+      responses: { '200': { description: OK } }
+  /api/v1/nodes/{id}/revoke:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post: { summary: Revoke a node (admin). Its agent is rejected from now on., responses: { '200': { description: OK } } }
+  /api/v1/nodes/{id}/enrollment-token:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post: { summary: Issue a new enrollment token for a node that has not enrolled yet (admin)., responses: { '200': { description: OK }, '409': { $ref: '#/components/responses/Error' } } }
+  /api/v1/nodes/{id}/targets:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get: { summary: List protected targets with latest measurements., responses: { '200': { description: OK } } }
+    post:
+      summary: Protect an IP or CIDR with services (operator). Publishes a new policy.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TargetCreate' } } } }
+      responses: { '201': { description: Created }, '400': { $ref: '#/components/responses/Error' }, '422': { $ref: '#/components/responses/Error' } }
+  /api/v1/targets/{id}:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    delete: { summary: Remove a protected target (operator). Publishes a new policy., responses: { '200': { description: OK } } }
+  /api/v1/targets/{id}/metrics:
+    parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/Range' } ]
+    get: { summary: Target time series (bucketed average)., responses: { '200': { description: OK } } }
+  /api/v1/nodes/{id}/metrics:
+    parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/Range' } ]
+    get: { summary: Node time series (bandwidth, pps, CPU, memory)., responses: { '200': { description: OK } } }
+  /api/v1/nodes/{id}/rules:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get: { summary: List rules (active only unless active=false)., responses: { '200': { description: OK } } }
+    post:
+      summary: Create an allow rule or a time-limited deny rule (operator). Publishes a new policy. Deny rules must expire within 30 days.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RuleCreate' } } } }
+      responses: { '201': { description: Created }, '422': { $ref: '#/components/responses/Error' } }
+  /api/v1/rules/{id}/revoke:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post: { summary: Revoke a rule (operator). Publishes a new policy., responses: { '200': { description: OK }, '409': { $ref: '#/components/responses/Error' } } }
+  /api/v1/rules/{id}/history:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get: { summary: Rule history., responses: { '200': { description: OK } } }
+  /api/v1/nodes/{id}/policies:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get: { summary: Policy versions (metadata)., responses: { '200': { description: OK } } }
+  /api/v1/nodes/{id}/policies/{version}/rollback:
+    parameters:
+      - { $ref: '#/components/parameters/Id' }
+      - { name: version, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    post: { summary: Re-publish an earlier version as a new, freshly signed version (operator)., responses: { '201': { description: Created } } }
+  /api/v1/profiles:
+    get: { summary: List protection profiles., responses: { '200': { description: OK } } }
+    post: { summary: Create a protection profile (admin). Thresholds are validated., responses: { '201': { description: Created }, '400': { $ref: '#/components/responses/Error' } } }
+  /api/v1/locations:
+    get: { summary: List locations., responses: { '200': { description: OK } } }
+    post: { summary: Create a location (admin)., responses: { '201': { description: Created } } }
+  /api/v1/users:
+    get: { summary: List users (admin)., responses: { '200': { description: OK } } }
+    post: { summary: Create a user (admin). Password minimum 12 characters., responses: { '201': { description: Created } } }
+  /api/v1/users/{id}/disable:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post: { summary: Disable a user and end their sessions (admin)., responses: { '200': { description: OK } } }
+  /api/v1/incidents:
+    get:
+      summary: List incidents. Filter by status (open, closed) and node_id.
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [all, open, closed] } }
+        - { name: node_id, in: query, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 500 } }
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Incident' } } } } } }
+  /api/v1/incidents/{id}:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get: { summary: Incident with agent timeline, target series and mitigation actions., responses: { '200': { description: OK }, '404': { $ref: '#/components/responses/Error' } } }
+  /api/v1/actions:
+    get: { summary: Mitigation actions, newest first., responses: { '200': { description: OK } } }
+  /api/v1/actions/{id}/approve:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post: { summary: Approve a pending mitigation (operator). The agent applies it on its next heartbeat., responses: { '200': { description: OK }, '409': { $ref: '#/components/responses/Error' } } }
+  /api/v1/actions/{id}/reject:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post: { summary: Reject a pending mitigation (operator)., responses: { '200': { description: OK }, '409': { $ref: '#/components/responses/Error' } } }
+  /api/v1/alerts:
+    get: { summary: Alerts; open only unless open=false., responses: { '200': { description: OK } } }
+  /api/v1/alerts/{id}/ack:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post: { summary: Acknowledge an alert (operator)., responses: { '200': { description: OK } } }
+  /api/v1/audit:
+    get: { summary: Audit log, newest first (admin)., parameters: [ { name: limit, in: query, schema: { type: integer, maximum: 500 } } ], responses: { '200': { description: OK } } }
+  /agent/v1/enroll:
+    post:
+      security: []
+      summary: Register an agent with a one-time token and its Ed25519 public key.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/EnrollRequest' } } } }
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/EnrollResponse' } } } }, '401': { $ref: '#/components/responses/Error' } }
+  /agent/v1/heartbeat:
+    post:
+      security: []
+      summary: Signed status report. Returns the desired policy version and approval decisions.
+      description: Unknown fields are rejected, so agent and panel must be upgraded in the order panel first, agent second.
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/HeartbeatReply' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /agent/v1/policy:
+    get:
+      security: []
+      summary: Signed policy envelope for the node's desired version.
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Envelope' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    sessionCookie: { type: apiKey, in: cookie, name: ss_session }
+  parameters:
+    Id: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    Range: { name: range, in: query, schema: { type: string, enum: [1h, 6h, 24h, 7d], default: 1h } }
+  responses:
+    Error:
+      description: Error
+      content: { application/json: { schema: { type: object, properties: { error: { type: string } } } } }
+  schemas:
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, maxLength: 256 }
+    LoginResponse:
+      type: object
+      properties:
+        csrf_token: { type: string }
+        user: { type: object, properties: { id: { type: string }, email: { type: string }, role: { type: string, enum: [viewer, operator, admin] } } }
+    Node:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        status: { type: string, enum: [pending, online, offline, degraded, revoked] }
+        mode: { type: string, enum: [dry_run, approval, auto] }
+        management_cidrs: { type: array, items: { type: string } }
+        applied_policy_version: { type: integer }
+        desired_policy_version: { type: integer }
+        sync_status: { type: string, enum: [never, pending, synced, failed] }
+    NodeCreate:
+      type: object
+      required: [name, management_cidrs]
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 100 }
+        location_id: { type: string, format: uuid, nullable: true }
+        mode: { type: string, enum: [dry_run, approval, auto], default: dry_run }
+        management_cidrs: { type: array, minItems: 1, items: { type: string } }
+    NodeCreated:
+      type: object
+      properties:
+        node: { $ref: '#/components/schemas/Node' }
+        enrollment_token: { type: string, description: Shown once. }
+        expires_at: { type: string, format: date-time }
+    TargetCreate:
+      type: object
+      required: [name, prefix, profile]
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        prefix: { type: string, description: IPv4/IPv6 address or CIDR, example: 192.0.2.10 }
+        profile: { type: string }
+        services:
+          type: array
+          items: { type: object, required: [protocol, port], properties: { name: { type: string }, protocol: { type: string, enum: [tcp, udp] }, port: { type: integer, minimum: 1, maximum: 65535 } } }
+    RuleCreate:
+      type: object
+      required: [kind, prefix, reason]
+      additionalProperties: false
+      properties:
+        kind: { type: string, enum: [allow, deny] }
+        prefix: { type: string }
+        reason: { type: string, minLength: 3, maxLength: 500 }
+        expires_at: { type: string, format: date-time, description: Required for deny. }
+    Incident:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        target: { type: string }
+        category: { type: string, enum: [packet_flood, syn_flood, udp_flood, icmp_flood] }
+        verdict: { type: string, enum: [traffic_spike, suspicious_anomaly, confirmed_attack] }
+        status: { type: string, enum: [open, closed] }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+    EnrollRequest:
+      type: object
+      required: [token, public_key]
+      properties:
+        token: { type: string }
+        public_key: { type: string, description: Base64 Ed25519 public key (32 bytes) }
+        hostname: { type: string }
+        version: { type: string }
+    EnrollResponse:
+      type: object
+      properties:
+        node_id: { type: string, format: uuid }
+        panel_public_key: { type: string, description: Base64 Ed25519 public key of the panel }
+    HeartbeatReply:
+      type: object
+      properties:
+        desired_policy_version: { type: integer }
+        approved_plan_ids: { type: array, items: { type: string } }
+        rejected_plan_ids: { type: array, items: { type: string } }
+        server_time: { type: string, format: date-time }
+    Envelope:
+      type: object
+      description: Exact signed body; the agent verifies signature and SHA-256 before use.
+      properties:
+        version: { type: integer }
+        body: { type: string }
+        sha256: { type: string }
+        signature: { type: string, description: Base64 Ed25519 signature over body }
