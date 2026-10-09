@@ -1,4 +1,4 @@
-# Sentinel Shield
+# Sentinel Shield Created with KI
 
 Eine DDoS-Schutzplattform für Hosting- und Datacenter-Betreiber: zentrales Webpanel, signierte Policies, Schutz-Agents auf den Servern, Erkennung und Mitigation über nftables.
 
