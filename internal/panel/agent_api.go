@@ -290,8 +290,8 @@ func (a *App) applyIncident(ctx context.Context, tx pgx.Tx, nodeID, action strin
 		}
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO incidents (node_id, agent_incident_id, target_prefix, category, verdict, status,
-		started_at, ended_at, peak_pps, peak_bps, peak_syn_pps, peak_udp_pps, peak_icmp_pps, confidence)
-		VALUES ($1::uuid, $2, $3::cidr, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		started_at, ended_at, peak_pps, peak_bps, peak_syn_pps, peak_udp_pps, peak_icmp_pps, confidence, service)
+		VALUES ($1::uuid, $2, $3::cidr, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		ON CONFLICT (node_id, agent_incident_id) DO UPDATE SET
 		  category = EXCLUDED.category, verdict = EXCLUDED.verdict, status = EXCLUDED.status,
 		  ended_at = COALESCE(EXCLUDED.ended_at, incidents.ended_at),
@@ -301,9 +301,10 @@ func (a *App) applyIncident(ctx context.Context, tx pgx.Tx, nodeID, action strin
 		  peak_udp_pps = GREATEST(incidents.peak_udp_pps, EXCLUDED.peak_udp_pps),
 		  peak_icmp_pps = GREATEST(incidents.peak_icmp_pps, EXCLUDED.peak_icmp_pps),
 		  confidence = GREATEST(incidents.confidence, EXCLUDED.confidence),
+		  service = EXCLUDED.service,
 		  updated_at = now()`,
 		nodeID, ev.ID, ev.Target, string(ev.Category), string(ev.Verdict), status, ev.Started, ended,
-		ev.PeakPPS, ev.PeakBPS, ev.PeakSYNPPS, ev.PeakUDPPPS, ev.PeakICMPPS, ev.Confidence); err != nil {
+		ev.PeakPPS, ev.PeakBPS, ev.PeakSYNPPS, ev.PeakUDPPPS, ev.PeakICMPPS, ev.Confidence, ev.Service); err != nil {
 		return err
 	}
 	if ev.Verdict == detect.VerdictConfirmed && action != "closed" {

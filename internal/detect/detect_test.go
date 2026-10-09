@@ -245,3 +245,30 @@ func TestHighEventRateStaysBounded(t *testing.T) {
 		t.Fatalf("unerwartete Zustandsanzahl %d", len(f.e.targets))
 	}
 }
+
+func TestConnectionRateDetectsSYNSurgeWithoutRatioCheck(t *testing.T) {
+	// Established game traffic: many packets, almost no new connections. Must stay quiet.
+	th := Thresholds{ConnPPS: 40, ConfirmSeconds: 3, ClearSeconds: 4}
+	e := NewEngine(func() string { return "svc" })
+	at := t0
+	for i := 0; i < 20; i++ {
+		at = at.Add(time.Second)
+		if ch, _ := e.Observe("192.0.2.10/32|tcp/25565", Sample{At: at, Interval: time.Second, Packets: 5000, SYN: 3}, th); len(ch) != 0 {
+			t.Fatalf("Spielverkehr mit wenigen neuen Verbindungen darf keinen Vorfall auslösen: %v", ch)
+		}
+	}
+	// Connection flood on the same port: 200 SYN/s with few other packets.
+	var confirmed bool
+	for i := 0; i < 6; i++ {
+		at = at.Add(time.Second)
+		ch, _ := e.Observe("192.0.2.10/32|tcp/25565", Sample{At: at, Interval: time.Second, Packets: 300, SYN: 200}, th)
+		for _, c := range ch {
+			if c.Event.Verdict == VerdictConfirmed && c.Event.Category == CategoryConnRate {
+				confirmed = true
+			}
+		}
+	}
+	if !confirmed {
+		t.Fatal("Verbindungsflut auf einem Dienst muss als bestätigte connection_rate erkannt werden")
+	}
+}

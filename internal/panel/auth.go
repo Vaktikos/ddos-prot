@@ -123,6 +123,7 @@ func (a *App) EnsureSeedAdmin(ctx context.Context) error {
 type loginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	OTP      string `json:"otp,omitempty"`
 }
 
 // dummyHash keeps the timing of unknown-user logins close to real ones.
@@ -143,11 +144,13 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	var id, role, hash string
-	var disabled bool
+	var disabled, totpOn bool
 	var failed int
 	var locked *time.Time
-	err := a.db.QueryRow(ctx, `SELECT id::text, role, password_hash, disabled, failed_logins, locked_until FROM users WHERE email = $1`, email).
-		Scan(&id, &role, &hash, &disabled, &failed, &locked)
+	var lastStep int64
+	err := a.db.QueryRow(ctx, `SELECT id::text, role, password_hash, disabled, failed_logins, locked_until, totp_enabled, totp_last_step
+		FROM users WHERE email = $1`, email).
+		Scan(&id, &role, &hash, &disabled, &failed, &locked, &totpOn, &lastStep)
 	if errors.Is(err, pgx.ErrNoRows) {
 		VerifyPassword(req.Password, dummyHash)
 		writeErr(w, http.StatusUnauthorized, "anmeldung fehlgeschlagen")
@@ -163,7 +166,25 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "anmeldung fehlgeschlagen")
 		return
 	}
-	if !VerifyPassword(req.Password, hash) {
+	passwordOK := VerifyPassword(req.Password, hash)
+	usedStep := int64(-1)
+	if passwordOK && totpOn {
+		if req.OTP == "" {
+			// Password was right: ask for the second factor without counting a failure.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(mfaRequiredBody())
+			return
+		}
+		secret, _, ok := a.userSecret(r, id)
+		if ok {
+			usedStep = verifyTOTP(secret, req.OTP, now, lastStep)
+		}
+		if usedStep < 0 {
+			passwordOK = false
+		}
+	}
+	if !passwordOK {
 		failed++
 		var lockUntil *time.Time
 		if failed >= maxFailedLogins {
@@ -199,7 +220,8 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "interner Fehler")
 		return
 	}
-	if _, err := tx.Exec(ctx, `UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = now() WHERE id = $1`, id); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = now(),
+		totp_last_step = CASE WHEN $2::bigint >= 0 THEN $2::bigint ELSE totp_last_step END WHERE id = $1`, id, usedStep); err != nil {
 		writeErr(w, http.StatusInternalServerError, "interner Fehler")
 		return
 	}

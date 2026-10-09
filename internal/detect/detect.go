@@ -34,6 +34,8 @@ const (
 	CategorySYNFlood    Category = "syn_flood"
 	CategoryUDPFlood    Category = "udp_flood"
 	CategoryICMPFlood   Category = "icmp_flood"
+	// CategoryConnRate is a surge of new connection attempts to one service port.
+	CategoryConnRate Category = "connection_rate"
 )
 
 // Sample is a counter delta for one target over Interval.
@@ -53,6 +55,7 @@ type Thresholds struct {
 	SYNPPS             float64
 	UDPPPS             float64
 	ICMPPPS            float64
+	ConnPPS            float64 // new connection attempts per second on one service
 	BaselineMultiplier float64
 	MinPPS             float64
 	ConfirmSeconds     int
@@ -63,6 +66,7 @@ type Thresholds struct {
 type Event struct {
 	ID         string    `json:"id"`
 	Target     string    `json:"target"`
+	Service    string    `json:"service,omitempty"` // e.g. "tcp/25565" for service-level events
 	Category   Category  `json:"category"`
 	Verdict    Verdict   `json:"verdict"`
 	Started    time.Time `json:"started_at"`
@@ -224,6 +228,9 @@ func absoluteHit(th Thresholds, pps, syn, udp, icmp float64) (bool, Category) {
 		return true, CategoryICMPFlood
 	case th.TotalPPS > 0 && pps >= th.TotalPPS:
 		return true, CategoryPacketFlood
+	case th.ConnPPS > 0 && syn >= th.ConnPPS:
+		// No SYN-ratio check: legitimate sessions with many packets are not new connections.
+		return true, CategoryConnRate
 	}
 	return false, ""
 }

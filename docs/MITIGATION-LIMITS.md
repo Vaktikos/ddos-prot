@@ -14,8 +14,9 @@ Ein Agent auf dem Zielserver kann nur Pakete verwerfen, die **bei ihm ankommen**
 | Protokollanomalien (ungültige Flags) | **Nicht implementiert** | Vorgelagerte Normalisierung |
 | Angriffe auf einzelne Ports | Zähler je Dienst (Pakete, SYN); Ratenlimit je Port | Port-Filter vor dem Server |
 | Layer 7 (HTTP-Floods, Request-Muster) | **Nicht implementiert** | Reverse Proxy oder WAF mit Rate-Limits |
-| Minecraft-Java-Handshake, Status-Pings | **Nicht implementiert.** Das Profil `minecraft_java` ist akzeptiert, verwendet aber die generischen Schwellen | Minecraft-aware Proxy (z. B. Verbindungsrate pro Quelle auf Protokollebene) |
-| Minecraft-Bedrock (UDP) | Wie generisches UDP; keine protokollspezifische Erkennung | Upstream-Filter |
+| Verbindungsflut auf einen Minecraft-Port | Erkannt über neue Verbindungen je Dienstport (`conn_pps`, SYN-Zähler, ohne SYN-Verhältnis). Mitigation über das SYN-Ratenlimit, das alle TCP-Dienste des Ziels betrifft | Bei Volumen über der Leitung: Scrubbing |
+| Minecraft-Handshake, Status-Pings, Spielerzahl | **Nicht implementiert.** Erkennung läuft nur auf Zählerebene, ohne Protokollinspektion | Minecraft-aware Proxy mit Protokollprüfung |
+| Minecraft-Bedrock (UDP) | Wie generisches UDP; keine Verbindungsrate, weil UDP keine Verbindungen kennt | Upstream-Filter |
 
 ## Ratenlimits und Sperren
 

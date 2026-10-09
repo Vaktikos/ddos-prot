@@ -74,6 +74,9 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/login", a.login)
 	mux.HandleFunc("POST /api/v1/auth/logout", a.withSession(RoleViewer, a.logout))
 	mux.HandleFunc("GET /api/v1/auth/me", a.withSession(RoleViewer, a.me))
+	mux.HandleFunc("POST /api/v1/auth/mfa/enroll", a.withSession(RoleViewer, a.mfaEnroll))
+	mux.HandleFunc("POST /api/v1/auth/mfa/enable", a.withSession(RoleViewer, a.mfaEnable))
+	mux.HandleFunc("POST /api/v1/auth/mfa/disable", a.withSession(RoleViewer, a.mfaDisable))
 
 	// Read access (viewer and up)
 	mux.HandleFunc("GET /api/v1/dashboard", a.withSession(RoleViewer, a.dashboard))

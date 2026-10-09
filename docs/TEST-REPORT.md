@@ -8,14 +8,14 @@ Stand: 2026-10-09. Umgebung: Ubuntu 24.04.5 in einer VM (Kernel 6.18), Go 1.24.7
 |---|---|---|---|
 | `internal/netaddr` | 3 | Adressnormalisierung, Mindest-Präfixlängen, Familienüberlappung | bestanden |
 | `internal/policy` | 4 | Validierung (12 Ablehnungsfälle inkl. Management- und Trusted-Konflikt), Signatur, Manipulation | bestanden |
-| `internal/detect` | 11 | synthetische Messreihen: Ruhe, SYN-Flood, Kurzimpuls, adaptive Anomalie, Verkehrsspitze, Warm-up, IPv6-ICMP, Ziel-Unabhängigkeit, Eingabevalidierung, Ausschluss von Zustandsexplosion | bestanden |
+| `internal/detect` | 12 | synthetische Messreihen: Ruhe, SYN-Flood, Kurzimpuls, adaptive Anomalie, Verkehrsspitze, Warm-up, IPv6-ICMP, Ziel-Unabhängigkeit, Eingabevalidierung, Ausschluss von Zustandsexplosion | bestanden |
 | `internal/mitigate` | 7 | Stufen, Modi (dry_run/approval/auto), volle Sperrliste, Freigabe-Timeout, Entfernen je Vorfall | bestanden |
 | `internal/nft` | 10 | deterministisches Rendering, Accept vor Drop, abgelaufene Sperren entfallen, Ablehnung manipulierter Namen, Kernel-Parser (`nft -c`), Zählerparser, Integration mit Rollback | bestanden |
 | `internal/metrics` | 5 | /proc-Parser, CPU-Berechnung, Live-Lesen | bestanden |
 | `internal/identity` | 6 | Signatur, falscher Schlüssel, Zeitfenster, fehlende Header, Replay-Speicher, Schlüsselrechte | bestanden |
 | `internal/agent` | 10 | Dry-Run, Auto-Modus mit Entfernung nach Vorfall, Freigabe, **Panel-Ausfall mit Cache-Start**, **manipulierte Policy**, Kernel-Fehler, Outbox-Limit, HTTPS-Pflicht, Management-Pflicht | bestanden |
-| `internal/store` | 1 | Migrationen auf echtem PostgreSQL, idempotenter zweiter Lauf | bestanden (mit `SS_TEST_DSN`) |
-| `internal/panel` | 2 | **End-to-End** gegen PostgreSQL: Enrollment, Einmal-Token, signierte Heartbeats, Replay, Manipulation, Angriff und Schutz, Freigabe-Workflow, Sperren, Management-Schutz, Rollback, RBAC, CSRF, Origin, Login-Fehler, Dashboard, Audit, Widerruf. **Gleichzeitige Änderungen:** 12 parallele Schreibvorgänge am selben Node, lückenlose Versionen | bestanden (mit `SS_TEST_DSN`) |
+| `internal/store` | 1 | Migrationen auf echtem PostgreSQL (inkl. 0002), idempotenter zweiter Lauf | bestanden (mit `SS_TEST_DSN`) |
+| `internal/panel` | 5 | TOTP-Testvektoren (RFC 6238), Replay-Schutz, Verschlüsselung des Geheimnisses, MFA-Login gegen PostgreSQL | **End-to-End** gegen PostgreSQL: Enrollment, Einmal-Token, signierte Heartbeats, Replay, Manipulation, Angriff und Schutz, Freigabe-Workflow, Sperren, Management-Schutz, Rollback, RBAC, CSRF, Origin, Login-Fehler, Dashboard, Audit, Widerruf. **Gleichzeitige Änderungen:** 12 parallele Schreibvorgänge am selben Node, lückenlose Versionen | bestanden (mit `SS_TEST_DSN`) |
 
 Der Lauf mit `-race` war sauber. Die Gleichzeitigkeitsprüfung hat einen **echten Deadlock** zwischen parallelen Policy-Änderungen aufgedeckt (PostgreSQL `40P01`). Behoben durch Sperren des Node-Datensatzes als erste Schreiboperation jeder Transaktion. Der Test läuft seitdem dreimal hintereinander fehlerfrei und ohne fehlgeschlagene Anfragen.
 

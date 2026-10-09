@@ -13,6 +13,7 @@
 |---|---|---|
 | Passwortspeicherung | Argon2id (64 MiB, t=3, p=2), Salt pro Hash, konstante Zeitvergleiche, Dummy-Hash bei unbekanntem Benutzer | `TestEndToEnd` (Fehlversuch), `auth.go` |
 | Kontosperre | 5 Fehlversuche → 15 min gesperrt; Anmeldung pro IP 10/min | Code-Pfad in `login`; Rate-Limit-Test fehlt (siehe Lücken) |
+| MFA (TOTP, RFC 6238) | Optional pro Konto; Geheimnis AES-GCM-verschlüsselt; Codes nur einmal gültig (`totp_last_step`); falscher Code zählt als Fehlversuch | `TestTOTPRFC6238Vector`, `TestTOTPRejectsReplayAndOutOfWindow`, `TestMFALoginFlow` |
 | Sitzungen | Zufällige 256-Bit-Token, nur SHA-256 gespeichert, 12 h absolut, 30 min Leerlauf | `TestEndToEnd` (Login, Logout-Pfad, Berechtigungen) |
 | Rollen | viewer < operator < admin, Prüfung in jedem Handler über `withSession` | `TestEndToEnd` (viewer darf nicht schreiben, kein Audit-Zugriff) |
 | CSRF | Header `X-CSRF-Token` konstant-zeitig verglichen, Origin muss exakt passen | `TestEndToEnd` (fehlendes Token, fremder Origin) |
@@ -33,7 +34,8 @@
 
 ## Bekannte Lücken (ehrlich benannt)
 
-- **MFA ist nicht implementiert.** Das Konzept sieht TOTP vor; die Datenbank hat dafür noch keine Spalte. Bis dahin sollte der Zugriff nur über ein VPN oder einen SSO-Proxy mit MFA erfolgen.
+- **MFA ist nur per API einzurichten.** Der UI-Teil für Einrichtung und Deaktivierung fehlt; das Login-Formular fragt den Code ab. Einrichtung: `POST /api/v1/auth/mfa/enroll`, dann `POST /api/v1/auth/mfa/enable` mit einem Code. Recovery-Codes gibt es nicht: Bei Verlust hilft nur ein Administrator-Eingriff in der Datenbank (`UPDATE users SET totp_enabled=false`).
+- **MFA-Schlüssel hängt am Signaturschlüssel.** Das Verschlüsselungs-Geheimnis wird aus dem Panel-Signaturschlüssel abgeleitet. Ein Verlust dieses Schlüssels macht alle gespeicherten MFA-Geheimnisse unlesbar.
 - **Kein Rate-Limit-Test** für die Anmeldung. Der Limiter existiert, ist aber nur über den Code geprüft.
 - **Signaturschlüssel des Panels** liegt als Datei (0600) auf dem Panel-Host. Ein HSM oder KMS ist vorgesehen, aber nicht umgesetzt. Ein Verlust des Schlüssels ist kritisch (siehe `OPERATIONS.md`, Backup).
 - **Kein Schlüsselwechsel für Nodes.** Ein kompromittierter Agent wird durch Widerruf gesperrt, nicht durch Rotation des Schlüssels. Neu-Enrollment erfordert einen neuen Node.

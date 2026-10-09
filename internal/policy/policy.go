@@ -72,6 +72,9 @@ type Profile struct {
 	SYNPPS   float64 `json:"syn_pps"`
 	UDPPPS   float64 `json:"udp_pps"`
 	ICMPPPS  float64 `json:"icmp_pps"`
+	// ConnPPS limits new connection attempts per second on a single service port.
+	// Intended for game servers such as Minecraft, where normal traffic is mostly established packets.
+	ConnPPS float64 `json:"conn_pps"`
 
 	// Adaptive detection: a hit when pps >= max(MinPPS, baseline*BaselineMultiplier).
 	BaselineMultiplier float64 `json:"baseline_multiplier"`
@@ -285,7 +288,7 @@ func validateProfile(name string, prof Profile) []error {
 	}
 	for label, v := range map[string]float64{
 		"total_pps": prof.TotalPPS, "syn_pps": prof.SYNPPS, "udp_pps": prof.UDPPPS,
-		"icmp_pps": prof.ICMPPPS, "min_pps": prof.MinPPS,
+		"icmp_pps": prof.ICMPPPS, "min_pps": prof.MinPPS, "conn_pps": prof.ConnPPS,
 	} {
 		if v < 0 {
 			add("%s darf nicht negativ sein", label)
@@ -300,7 +303,7 @@ func validateProfile(name string, prof Profile) []error {
 	if prof.ClearSeconds < 1 || prof.ClearSeconds > 900 {
 		add("clear_seconds muss zwischen 1 und 900 liegen")
 	}
-	if prof.TotalPPS == 0 && prof.SYNPPS == 0 && prof.UDPPPS == 0 && prof.ICMPPPS == 0 && prof.BaselineMultiplier == 0 {
+	if prof.TotalPPS == 0 && prof.SYNPPS == 0 && prof.UDPPPS == 0 && prof.ICMPPPS == 0 && prof.ConnPPS == 0 && prof.BaselineMultiplier == 0 {
 		add("mindestens ein Erkennungsschwellwert muss gesetzt sein")
 	}
 	m := prof.Mitigation

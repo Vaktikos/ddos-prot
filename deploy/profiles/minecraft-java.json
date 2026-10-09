@@ -1,0 +1,18 @@
+{
+  "name": "minecraft-java",
+  "kind": "minecraft_java",
+  "config": {
+    "total_pps": 60000,
+    "syn_pps": 400,
+    "udp_pps": 0,
+    "icmp_pps": 2000,
+    "conn_pps": 60,
+    "confirm_seconds": 5,
+    "clear_seconds": 20,
+    "mitigation": {
+      "syn_rate_per_source": 30,
+      "udp_rate_per_source": 0,
+      "auto_block_seconds": 120
+    }
+  }
+}

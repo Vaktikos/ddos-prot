@@ -51,7 +51,9 @@ func Decide(ev detect.Event, prof policy.Profile, mode string, dynUsed, dynMax i
 	var kind string
 	var rate int
 	switch ev.Category {
-	case detect.CategorySYNFlood:
+	case detect.CategorySYNFlood, detect.CategoryConnRate:
+		// Connection surges are limited with the same per-source SYN rule. That rule
+		// applies to all TCP services of the target, not only the attacked port.
 		kind, rate = nft.KindSYNRate, prof.Mitigation.SYNRatePerSource
 	case detect.CategoryUDPFlood:
 		kind, rate = nft.KindUDPRate, prof.Mitigation.UDPRatePerSource

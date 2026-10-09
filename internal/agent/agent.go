@@ -292,6 +292,7 @@ func (a *Agent) Tick(now time.Time) {
 			ICMP:    a.delta(counters, base+"_icmp", false),
 		}
 		dropped := a.delta(counters, base+"_rl", false)
+		a.observeServices(counters, now, dt, pre, t, base, prof)
 		changes, err := a.engine.Observe(key, sample, thresholdsOf(prof))
 		if err != nil {
 			a.setError("erkennung " + key + ": " + err.Error())
@@ -319,6 +320,31 @@ func (a *Agent) Tick(now time.Time) {
 	}
 }
 
+// observeServices runs connection-rate detection per protected TCP service port.
+// Engine keys are "prefix|proto/port"; handleChange splits them again.
+func (a *Agent) observeServices(counters map[string]nft.Counter, now time.Time, dt time.Duration, pre netip.Prefix, t policy.Target, base string, prof policy.Profile) {
+	if prof.ConnPPS <= 0 {
+		return
+	}
+	th := detect.Thresholds{ConnPPS: prof.ConnPPS, ConfirmSeconds: prof.ConfirmSeconds, ClearSeconds: prof.ClearSeconds}
+	for j, svc := range t.Services {
+		if svc.Protocol != policy.ProtoTCP {
+			continue
+		}
+		sb := fmt.Sprintf("%s_s%d", base, j)
+		key := fmt.Sprintf("%s|%s/%d", pre.String(), svc.Protocol, svc.Port)
+		sample := detect.Sample{At: now, Interval: dt, SYN: a.delta(counters, sb+"_syn", false)}
+		changes, err := a.engine.Observe(key, sample, th)
+		if err != nil {
+			a.setError("erkennung " + key + ": " + err.Error())
+			continue
+		}
+		for _, ch := range changes {
+			a.handleChange(ch, now)
+		}
+	}
+}
+
 func (a *Agent) delta(counters map[string]nft.Counter, name string, bytes bool) uint64 {
 	cur, ok := counters[name]
 	if !ok {
@@ -337,6 +363,10 @@ func (a *Agent) delta(counters map[string]nft.Counter, name string, bytes bool) 
 
 func (a *Agent) handleChange(ch detect.Change, now time.Time) {
 	ev := ch.Event
+	if prefix, svc, ok := strings.Cut(ev.Target, "|"); ok {
+		ev.Target, ev.Service = prefix, svc
+	}
+	ch.Event = ev
 	a.emit("incident", ch.Kind, ev)
 	a.urgent = true
 	pre := a.profileFor(ev.Target)
@@ -632,7 +662,7 @@ func (a *Agent) emit(typ, action string, payload any) {
 
 func thresholdsOf(p policy.Profile) detect.Thresholds {
 	return detect.Thresholds{
-		TotalPPS: p.TotalPPS, SYNPPS: p.SYNPPS, UDPPPS: p.UDPPPS, ICMPPPS: p.ICMPPPS,
+		TotalPPS: p.TotalPPS, SYNPPS: p.SYNPPS, UDPPPS: p.UDPPPS, ICMPPPS: p.ICMPPPS, ConnPPS: 0,
 		BaselineMultiplier: p.BaselineMultiplier, MinPPS: p.MinPPS,
 		ConfirmSeconds: p.ConfirmSeconds, ClearSeconds: p.ClearSeconds,
 	}

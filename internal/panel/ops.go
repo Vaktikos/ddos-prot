@@ -240,6 +240,7 @@ type incidentDTO struct {
 	ID         string     `json:"id"`
 	NodeName   string     `json:"node_name"`
 	Target     string     `json:"target"`
+	Service    string     `json:"service"`
 	Category   string     `json:"category"`
 	Verdict    string     `json:"verdict"`
 	Status     string     `json:"status"`
@@ -253,13 +254,13 @@ type incidentDTO struct {
 	Confidence float64    `json:"confidence"`
 }
 
-const incidentSelect = `SELECT i.id::text, n.name, i.target_prefix::text, i.category, i.verdict, i.status,
+const incidentSelect = `SELECT i.id::text, n.name, i.target_prefix::text, i.service, i.category, i.verdict, i.status,
 	i.started_at, i.ended_at, i.peak_pps, i.peak_bps, i.peak_syn_pps, i.peak_udp_pps, i.peak_icmp_pps, i.confidence
 	FROM incidents i JOIN nodes n ON n.id = i.node_id`
 
 func scanIncident(row rowScanner) (incidentDTO, error) {
 	var d incidentDTO
-	err := row.Scan(&d.ID, &d.NodeName, &d.Target, &d.Category, &d.Verdict, &d.Status, &d.StartedAt, &d.EndedAt,
+	err := row.Scan(&d.ID, &d.NodeName, &d.Target, &d.Service, &d.Category, &d.Verdict, &d.Status, &d.StartedAt, &d.EndedAt,
 		&d.PeakPPS, &d.PeakBPS, &d.PeakSYNPPS, &d.PeakUDPPPS, &d.PeakICMPPS, &d.Confidence)
 	return d, err
 }
