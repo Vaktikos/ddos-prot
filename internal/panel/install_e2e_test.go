@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/vaktikos/ddos-prot/internal/agent"
 	"net/http"
 	"os"
 	"os/exec"
@@ -46,7 +47,8 @@ func TestInstallScriptEndToEnd(t *testing.T) {
 	_ = os.WriteFile(script, body, 0o755)
 
 	run := func(root, token string) (string, error) {
-		args := []string{script, "--root", root, "--yes", "--uplink", "lo", "--management-cidr", "203.0.113.10/32"}
+		args := []string{script, "--root", root, "--yes", "--uplink", "lo", "--management-cidr", "203.0.113.10/32",
+			"--l7-log", "web,/var/log/nginx/ss_reject.log,192.0.2.10/32", "--mc-guard", "mc,9199,192.0.2.11"}
 		if token != "" {
 			args = append(args, "--token", token)
 		}
@@ -94,6 +96,14 @@ func TestInstallScriptEndToEnd(t *testing.T) {
 	}
 	if cfg["panel_url"] != tp.base || cfg["management_cidrs"].([]any)[0] != "203.0.113.10/32" {
 		t.Fatalf("Konfiguration falsch: %s", cfgRaw)
+	}
+	loaded, err := agent.LoadConfig(filepath.Join(root, "etc/sentinel-shield/agent.json"))
+	if err != nil {
+		t.Fatalf("der Agent muss die erzeugte Konfiguration akzeptieren: %v\n%s", err, cfgRaw)
+	}
+	if len(loaded.L7Sources) != 1 || loaded.L7Sources[0].Path != "/var/log/nginx/ss_reject.log" ||
+		len(loaded.MinecraftGuards) != 1 || loaded.MinecraftGuards[0].StatsURL != "http://127.0.0.1:9199/stats" {
+		t.Fatalf("L7/Guard-Konfiguration falsch: %+v", loaded)
 	}
 	if _, err := os.Stat(filepath.Join(root, "var/lib/sentinel-shield/node.json")); err != nil {
 		t.Fatalf("Node wurde nicht registriert:\n%s", out)

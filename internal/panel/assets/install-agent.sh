@@ -16,6 +16,8 @@
 #                          address of the current SSH session (needs sudo -E or root login)
 #   --uplink IFACE|auto    interface for traffic statistics (default: auto, the default route)
 #   --xdp off|auto|IFACE   enable the XDP early-drop filter (default: off)
+#   --l7-log NAME,PATH,TARGET   follow a reverse-proxy reject log (ss_reject format), repeatable
+#   --mc-guard NAME,PORT,TARGET read a local sentinel-mcguard (stats on 127.0.0.1:PORT), repeatable
 #   --ca-file PATH         extra CA certificate for the panel
 #   --root DIR             install below DIR and do not touch systemd (for testing)
 #   --yes                  do not ask questions
@@ -25,12 +27,12 @@ set -euo pipefail
 PANEL="@PANEL_URL@"
 [[ "$PANEL" == @* ]] && PANEL=""
 TOKEN="" BINARY="" UPLINK="auto" XDP="off" CA_FILE="" ROOT="" ASSUME_YES=0 DRY_RUN=0
-MGMT=()
+MGMT=() L7=() MCG=()
 
 log()  { printf '[install] %s\n' "$*"; }
 warn() { printf '[install] WARNUNG: %s\n' "$*" >&2; }
 die()  { printf '[install] FEHLER: %s\n' "$*" >&2; exit 1; }
-usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -40,6 +42,8 @@ while [[ $# -gt 0 ]]; do
     --management-cidr) MGMT+=("${2:-}"); shift 2 ;;
     --uplink) UPLINK="${2:-}"; shift 2 ;;
     --xdp) XDP="${2:-}"; shift 2 ;;
+    --l7-log) L7+=("${2:-}"); shift 2 ;;
+    --mc-guard) MCG+=("${2:-}"); shift 2 ;;
     --ca-file) CA_FILE="${2:-}"; shift 2 ;;
     --root) ROOT="${2:-}"; shift 2 ;;
     --yes) ASSUME_YES=1; shift ;;
@@ -106,6 +110,12 @@ fi
 PANEL="${PANEL%/}"
 [[ "$UPLINK" == "auto" || "$UPLINK" =~ ^[A-Za-z0-9._-]{1,15}$ ]] || die "ungültiger Interface-Name: $UPLINK"
 [[ "$XDP" == "off" || "$XDP" == "auto" || "$XDP" =~ ^[A-Za-z0-9._-]{1,15}$ ]] || die "ungültiger Wert für --xdp: $XDP"
+for spec in "${L7[@]}"; do
+  [[ "$spec" =~ ^[A-Za-z0-9_-]{1,32},/[A-Za-z0-9._/-]{1,200},[0-9a-fA-F:./]{3,50}$ ]] || die "ungültiger Wert für --l7-log (NAME,/pfad/zum.log,ZIEL): $spec"
+done
+for spec in "${MCG[@]}"; do
+  [[ "$spec" =~ ^[A-Za-z0-9_-]{1,32},[0-9]{2,5},[0-9a-fA-F:./]{3,50}$ ]] || die "ungültiger Wert für --mc-guard (NAME,PORT,ZIEL): $spec"
+done
 [[ -z "$TOKEN" || "$TOKEN" =~ ^[A-Za-z0-9_-]{20,128}$ ]] || die "der Enrollment-Token hat ein ungültiges Format"
 [[ -z "$CA_FILE" || -r "$CA_FILE" ]] || die "CA-Datei nicht lesbar: $CA_FILE"
 
@@ -181,6 +191,10 @@ if [[ -e "$CONF" ]]; then
   log "vorhandene Konfiguration bleibt unverändert: $CONF"
 else
   log "schreibe $CONF"
+  L7_JSON="" MCG_JSON="" IFS_SAVE="$IFS"
+  for spec in "${L7[@]}"; do IFS=, read -r n p t <<<"$spec"; L7_JSON+="{\"name\":\"$n\",\"path\":\"$p\",\"target\":\"$t\"},"; done
+  for spec in "${MCG[@]}"; do IFS=, read -r n p t <<<"$spec"; MCG_JSON+="{\"name\":\"$n\",\"stats_url\":\"http://127.0.0.1:$p/stats\",\"target\":\"$t\"},"; done
+  IFS="$IFS_SAVE"
   XDP_JSON="[]"; [[ "$XDP" != "off" ]] && XDP_JSON="$(json_list "$XDP")"
   if [[ $DRY_RUN -eq 0 ]]; then
     cat > "$CONF" <<JSON
@@ -196,7 +210,9 @@ else
   "detect_interval_ms": 1000,
   "approval_timeout_seconds": 900,
   "xdp_interfaces": ${XDP_JSON},
-  "xdp_mode": "auto"
+  "xdp_mode": "auto",
+  "l7_sources": [${L7_JSON%,}],
+  "minecraft_guards": [${MCG_JSON%,}]
 }
 JSON
     chmod 0640 "$CONF"
