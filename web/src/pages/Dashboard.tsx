@@ -34,7 +34,7 @@ export default function DashboardPage({ onOpenNode }: { onOpenNode: (id: string)
 
   useEffect(() => {
     api<Node[]>("GET", "/api/v1/nodes").then((n) => {
-      setNodes(n);
+      setNodes(n.filter((x) => x.status !== "revoked"));
       if (!nodeId && n.length) setNodeId(n[0].id);
     }).catch(() => undefined);
   }, [nodeId]);
@@ -56,7 +56,7 @@ export default function DashboardPage({ onOpenNode }: { onOpenNode: (id: string)
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-5">
         <Stat label="Geschützte Ziele" value={fmt.num(data.protected_targets)} />
-        <Stat label="Nodes online" value={`${online} / ${total}`} tone={online < total ? "warn" : "ok"} />
+        <Stat label="Nodes online" value={`${online} / ${total}`} tone={total === 0 ? "default" : online < total ? "warn" : "ok"} />
         <Stat label="Durchsatz" value={`${fmt.num(data.throughput_gbps, 3)} Gbit/s`} />
         <Stat label="Pakete" value={`${fmt.num(data.pps)} pps`} />
         <Stat label="Verworfen (Mitigation)" value={`${fmt.num(data.dropped_pps)} pps`} tone={data.dropped_pps > 0 ? "warn" : "default"} />
@@ -94,9 +94,9 @@ export default function DashboardPage({ onOpenNode }: { onOpenNode: (id: string)
 
       <div className="grid gap-6 xl:grid-cols-2">
         <Card title="Nodes">
-          {data.node_details.length === 0 ? <Empty>Noch keine Nodes registriert.</Empty> : (
+          {(data.node_details ?? []).length === 0 ? <Empty>Noch keine Nodes registriert.</Empty> : (
             <Table headers={["Node", "Status", "CPU", "RAM", "Gbit/s", "pps", "Policy", "Messung"]}>
-              {data.node_details.map((n) => (
+              {(data.node_details ?? []).map((n) => (
                 <tr key={n.id} className="cursor-pointer hover:bg-slate-800/40" onClick={() => onOpenNode(n.id)}>
                   <td className="px-3 py-2 font-medium text-slate-100">{n.name}</td>
                   <td className="px-3 py-2"><Badge value={n.status} /></td>
@@ -113,9 +113,9 @@ export default function DashboardPage({ onOpenNode }: { onOpenNode: (id: string)
         </Card>
 
         <Card title="Geschützte Ziele">
-          {data.target_details.length === 0 ? <Empty>Noch keine Ziele definiert.</Empty> : (
+          {(data.target_details ?? []).length === 0 ? <Empty>Noch keine Ziele definiert.</Empty> : (
             <Table headers={["Ziel", "Node", "Gbit/s", "pps", "SYN/s", "Verworfen/s"]}>
-              {data.target_details.map((t) => (
+              {(data.target_details ?? []).map((t) => (
                 <tr key={t.id}>
                   <td className="px-3 py-2"><div className="font-medium text-slate-100">{t.name}</div><div className="font-mono text-xs text-slate-500">{t.prefix}</div></td>
                   <td className="px-3 py-2 text-slate-400">{t.node_name}</td>

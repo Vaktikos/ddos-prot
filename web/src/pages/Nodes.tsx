@@ -85,7 +85,8 @@ function NodeDetail({ user, nodeId, onBack }: { user: User; nodeId: string; onBa
   const [versions, setVersions] = useState<PolicyVersion[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const canOperate = user.role === "operator" || user.role === "admin";
+  // A revoked node accepts no changes; the API refuses them too.
+  const canOperate = (user.role === "operator" || user.role === "admin") && node?.status !== "revoked";
 
   const load = useCallback(async () => {
     const [n, t, r, v, p] = await Promise.all([
@@ -193,7 +194,7 @@ function NodeDetail({ user, nodeId, onBack }: { user: User; nodeId: string; onBa
               <td className="px-3 py-2 text-xs text-slate-500">{fmt.time(v.created_at)}</td>
               <td className="px-3 py-2 font-mono text-xs text-slate-600">{v.sha256.slice(0, 16)}…</td>
               <td className="px-3 py-2 text-right">
-                {user.role === "admin" || user.role === "operator" ? (
+                {canOperate ? (
                   <Button onClick={() => run(() => api("POST", `/api/v1/nodes/${nodeId}/policies/${v.version}/rollback`), `Version ${v.version} als neue Version veröffentlicht`)}>Zurücksetzen</Button>
                 ) : null}
               </td>

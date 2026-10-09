@@ -69,7 +69,7 @@ type targetLive struct {
 
 func (a *App) dashboard(w http.ResponseWriter, r *http.Request, _ Actor) {
 	ctx := r.Context()
-	d := Dashboard{GeneratedAt: a.now(), Nodes: map[string]int{}}
+	d := Dashboard{GeneratedAt: a.now(), Nodes: map[string]int{}, NodeDetails: []nodeLive{}, TargetDetails: []targetLive{}}
 	fresh := a.now().Add(-freshness)
 
 	rows, err := a.db.Query(ctx, `
