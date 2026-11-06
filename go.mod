@@ -6,7 +6,7 @@ toolchain go1.27.2
 
 require (
 	github.com/cilium/ebpf v0.22.0
-	github.com/jackc/pgx/v5 v5.11.0
+	github.com/jackc/pgx/v5 v5.12.0
 	golang.org/x/crypto v0.58.0
 	golang.org/x/sys v0.49.0
 )
